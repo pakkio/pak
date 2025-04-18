@@ -1,6 +1,3 @@
-Okay, here is a draft for a `README.md` file for your `pak` script, incorporating the sections you requested.
-
-```markdown
 # Pak - A Simple Text-Based File Archiver
 
 **Version: 1.1.1**
@@ -202,11 +199,3 @@ pak version 1.1.1
   * **Filename Constraints:** While generally robust, filenames containing unusual characters (especially newlines, though `IFS= read -r` helps mitigate this during packing) could potentially cause issues, particularly during unpacking.
   * **Tool Dependency:** Relies on specific outputs/behaviors of `stat`, `wc`, `find`, `awk`. While common, variations between systems (e.g., BSD vs. GNU coreutils) might require minor adjustments.
 
-## License
-
-(Optional: Add your chosen license here, e.g., MIT License)
-
-```
-
-This README provides a comprehensive overview suitable for a GitHub repository, explaining the script's purpose, functionality, usage, and limitations. Remember to add a LICENSE file if you intend to distribute it under specific terms.
-```
