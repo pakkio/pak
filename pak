@@ -1,0 +1,188 @@
+#!/bin/bash
+# A text-based packer that bundles files (with metadata) into a single archive.
+#
+# Version: 1.1.1
+#
+# This version:
+#  - Defaults to pack mode when no option is provided.
+#  - Excludes files and directories considered residual:
+#       • Any file ending with ".pak"
+#       • Any file named "poetry.lock"
+#       • Any file or directory whose name starts with a dot (thus hiding .git, .idea, .env, etc.)
+#       • Additionally, prunes directories named "node_modules", "__pycache__", "python", "*.dist-info", "venv", ".venv", or "htmlcov"
+#
+# Usage:
+#   Pack (default mode):
+#       pak [--pack] <files/directories> > archive.pak
+#   List:
+#       pak --ls <archive file>
+#   Unpack:
+#       pak --unpack <archive file>
+#   Version:
+#       pak --version
+
+# Version information
+VERSION="1.1.1"
+
+# Marker strings.
+PAK_FILE_START="__PAK_FILE_START__"
+PAK_DATA_START="__PAK_DATA_START__"
+PAK_DATA_END="__PAK_DATA_END__"
+
+# Function to pack a single file.
+pack_file() {
+    local file="$1"
+    # Skip if the file ends with ".pak"
+    if [[ "$file" == *.pak ]]; then
+        return
+    fi
+    # Skip if the file is named "poetry.lock"
+    if [[ "$(basename "$file")" == "poetry.lock" ]]; then
+        return
+    fi
+    # Also skip if its basename starts with a dot.
+    if [[ "$(basename "$file")" == .* ]]; then
+        return
+    fi
+    local size lines
+    size=$(stat -c%s "$file")
+    lines=$(wc -l < "$file")
+    echo "$PAK_FILE_START"
+    echo "Path: $file"
+    echo "Size: $size"
+    echo "Lines: $lines"
+    echo "$PAK_DATA_START"
+    cat "$file"
+    echo "$PAK_DATA_END"
+}
+
+# Pack mode: process each argument.
+pack() {
+    if [ "$#" -eq 0 ]; then
+        echo "Usage: $0 --pack <files/directories>" >&2
+        exit 1
+    fi
+
+    for item in "$@"; do
+        if [ -f "$item" ]; then
+            # If it's a file, skip poetry.lock, hidden files or files ending with .pak.
+            if [[ "$(basename "$item")" == "poetry.lock" || "$(basename "$item")" == .* || "$item" == *.pak ]]; then
+                continue
+            fi
+            pack_file "$item"
+        elif [ -d "$item" ]; then
+            # Use find to recursively process files.
+            # Place -mindepth immediately after the directory argument to prevent warnings.
+            find "$item" -mindepth 1 \
+                \( -name "node_modules" -o -name "__pycache__" -o -name "python" -o -name "*.dist-info" -o -name "venv" -o -name ".venv" -o -name "htmlcov" \) -prune -o \
+                \( -type f ! -name "*.pak" ! -name "poetry.lock" ! -path "*/.*" -print \) | while IFS= read -r file; do
+                    pack_file "$file"
+                done
+        else
+            echo "Warning: '$item' is not a file or directory. Skipped." >&2
+        fi
+    done
+}
+
+# List mode: display archive metadata.
+list_archive() {
+    local archive="$1"
+    if [ ! -f "$archive" ]; then
+        echo "Archive file not found: $archive" >&2
+        exit 1
+    fi
+    awk -v FILE_START="$PAK_FILE_START" -v DATA_START="$PAK_DATA_START" '
+    BEGIN { OFS="\t" }
+    $0 == FILE_START { header = 1; next }
+    header && /^Path: / { path = substr($0, index($0," ")+1); next }
+    header && /^Size: / { size = substr($0, index($0," ")+1); next }
+    header && /^Lines: / { lines = substr($0, index($0," ")+1); next }
+    header && $0 == DATA_START {
+         print path, size, lines;
+         header = 0;
+         next;
+    }
+    ' "$archive"
+}
+
+# Unpack mode: read the archive and recreate the files/directories.
+unpack_archive() {
+    local archive="$1"
+    if [ ! -f "$archive" ]; then
+        echo "Archive file not found: $archive" >&2
+        exit 1
+    fi
+    local current_file=""
+    local in_data=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "$PAK_FILE_START")
+                current_file=""
+                ;;
+            "Path:"*)
+                current_file="${line#Path: }"
+                ;;
+            "$PAK_DATA_START")
+                mkdir -p "$(dirname "$current_file")"
+                : > "$current_file"
+                in_data=1
+                ;;
+            "$PAK_DATA_END")
+                in_data=0
+                ;;
+            *)
+                if [ "$in_data" -eq 1 ]; then
+                    echo "$line" >> "$current_file"
+                fi
+                ;;
+        esac
+    done < "$archive"
+}
+
+# Default to pack mode if the first argument does not start with "--".
+if [ "$#" -eq 0 ]; then
+    echo "Usage:" >&2
+    echo "  Pack (default): $0 [--pack] <files/directories> > archive.pak" >&2
+    echo "  List:         $0 --ls <archive file>" >&2
+    echo "  Unpack:       $0 --unpack <archive file>" >&2
+    echo "  Version:      $0 --version" >&2
+    exit 1
+fi
+
+if [[ "$1" != --* ]]; then
+    set -- --pack "$@"
+fi
+
+# Main command dispatch.
+case "$1" in
+    --pack)
+        shift
+        pack "$@"
+        ;;
+    --ls)
+        if [ -z "$2" ]; then
+            echo "Usage: $0 --ls <archive file>" >&2
+            exit 1
+        fi
+        list_archive "$2"
+        ;;
+    --unpack)
+        if [ -z "$2" ]; then
+            echo "Usage: $0 --unpack <archive file>" >&2
+            exit 1
+        fi
+        unpack_archive "$2"
+        ;;
+    --version)
+        echo "pak version $VERSION"
+        exit 0
+        ;;
+    *)
+        echo "Usage:" >&2
+        echo "  Pack (default): $0 [--pack] <files/directories> > archive.pak" >&2
+        echo "  List:         $0 --ls <archive file>" >&2
+        echo "  Unpack:       $0 --unpack <archive file>" >&2
+        echo "  Version:      $0 --version" >&2
+        exit 1
+        ;;
+esac
