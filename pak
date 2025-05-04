@@ -1,173 +1,379 @@
 #!/bin/bash
 # A text-based packer that bundles files (with metadata) into a single archive.
+# Output is designed to be easily parsed text, suitable for LLMs.
 #
-# Version: 1.1.1
+# Version: 1.2.2
 #
-# This version:
-#  - Defaults to pack mode when no option is provided.
-#  - Excludes files and directories considered residual:
-#       • Any file ending with ".pak"
-#       • Any file named "poetry.lock"
-#       • Any file or directory whose name starts with a dot (thus hiding .git, .idea, .env, etc.)
-#       • Additionally, prunes directories named "node_modules", "__pycache__", "python", "*.dist-info", "venv", ".venv", or "htmlcov"
+# Changes in this version:
+#  - Modified --ls output format to "filepath/filename and Size: XXX".
+#  - Modified --ls output to show only Path and Size (removed Lines).
+#  - Uses a unique UUID in markers to prevent collision with file content.
+#  - Unpacking writes each line followed by a newline. Note that this might
+#    alter original file line endings (\n vs \r\n) and add a newline to the
+#    last line of a file if the original didn't have one. For LLM consumption,
+#    this line-by-line representation is typically sufficient.
+#  - Added UUID marker prefix to the archive header.
+#  - Requires `uuidgen` command to be available for packing.
+#  - Improved reading of the archive in ls/unpack modes to handle the UUID header.
+#  - Fixed a potential issue where the last line of the archive might be missed
+#    in unpack_archive if it didn't end with a newline.
 #
 # Usage:
 #   Pack (default mode):
 #       pak [--pack] <files/directories> > archive.pak
 #   List:
-#       pak --ls <archive file>
+#       pak --ls <archive file>  # Outputs "filepath/filename and Size: XXX"
 #   Unpack:
 #       pak --unpack <archive file>
 #   Version:
 #       pak --version
 
 # Version information
-VERSION="1.1.1"
+VERSION="1.2.2" # Incremented version for the change
 
-# Marker strings.
-PAK_FILE_START="__PAK_FILE_START__"
-PAK_DATA_START="__PAK_DATA_START__"
-PAK_DATA_END="__PAK_DATA_END__"
+# Check for uuidgen dependency (only needed for packing)
+check_uuidgen() {
+    if ! command -v uuidgen &> /dev/null; then
+        echo "Error: 'uuidgen' command not found." >&2
+        echo "Please install it (e.g., on Debian/Ubuntu: sudo apt-get install uuid-runtime)." >&2
+        exit 1
+    fi
+}
 
-# Function to pack a single file.
+# Marker prefixes used to delimit sections in the archive
+PAK_UUID_LINE_PREFIX="__PAK_UUID__:"
+PAK_FILE_START_PREFIX="__PAK_FILE_"
+PAK_DATA_START_PREFIX="__PAK_DATA_"
+PAK_DATA_END_PREFIX="__PAK_DATA_" # Suffix will be _END__<UUID>__
+
+# Function to define the actual start/end markers using a specific UUID
+# This makes the markers unique for each archive, reducing collision risk.
+# Args:
+#   $1: The UUID for the current archive.
+define_markers() {
+    local uuid="$1"
+    PAK_FILE_START="${PAK_FILE_START_PREFIX}${uuid}_START__"
+    PAK_DATA_START="${PAK_DATA_START_PREFIX}${uuid}_START__"
+    PAK_DATA_END="${PAK_DATA_END_PREFIX}${uuid}_END__"
+}
+
+# Function to pack a single file into the archive format.
+# Outputs the file's metadata and content framed by markers to stdout.
+# Args:
+#   $1: The path to the file to pack.
+#   $2: The UUID for the current archive.
 pack_file() {
     local file="$1"
-    # Skip if the file ends with ".pak"
-    if [[ "$file" == *.pak ]]; then
-        return
-    fi
-    # Skip if the file is named "poetry.lock"
-    if [[ "$(basename "$file")" == "poetry.lock" ]]; then
-        return
-    fi
-    # Also skip if its basename starts with a dot.
-    if [[ "$(basename "$file")" == .* ]]; then
-        return
-    fi
+    local uuid="$2" # Now requires UUID
+    define_markers "$uuid" # Define markers using the current archive's UUID
+
+    # Exclusion checks are handled by the calling 'pack' function/find command.
+
     local size lines
-    size=$(stat -c%s "$file")
-    lines=$(wc -l < "$file")
+    # Get file size
+    if ! size=$(stat -c%s "$file" 2>/dev/null); then
+        echo "Warning: Could not get size for '$file'. Skipping." >&2
+        return
+    fi
+    # Get line count (best effort, might be N/A for binary files)
+    # Although not listed by --ls anymore, we keep it in the archive for potential future use
+    if ! lines=$(wc -l < "$file" 2>/dev/null); then
+         # Handle potential binary files where wc -l might fail or be irrelevant
+         lines="N/A"
+    fi
+
+    # Output the file header marker
     echo "$PAK_FILE_START"
+    # Output metadata
     echo "Path: $file"
     echo "Size: $size"
-    echo "Lines: $lines"
+    echo "Lines: $lines" # Still store Lines metadata in the archive
+    # Output the data start marker
     echo "$PAK_DATA_START"
+    # Output the file content
+    # Use cat for simplicity, works well for text.
+    # Note: This is still best for text files. Binary files might output garbled text.
     cat "$file"
+    # Output the data end marker (ensuring it's on its own line)
+    # Check if the file ends with a newline, if not, add one before the marker
+    if [ "$(tail -c1 "$file" | wc -l)" -eq 0 ]; then
+        echo # Add a newline
+    fi
     echo "$PAK_DATA_END"
 }
 
-# Pack mode: process each argument.
+# Pack mode: process each file/directory argument and output the archive to stdout.
 pack() {
+    check_uuidgen # Ensure uuidgen is available
+
     if [ "$#" -eq 0 ]; then
         echo "Usage: $0 --pack <files/directories>" >&2
         exit 1
     fi
 
+    # Generate a unique UUID for this archive
+    local archive_uuid
+    archive_uuid=$(uuidgen)
+    if [ -z "$archive_uuid" ]; then
+         echo "Error: Failed to generate UUID." >&2
+         exit 1
+    fi
+
+    # Print the UUID header line at the very beginning of the archive
+    echo "${PAK_UUID_LINE_PREFIX}${archive_uuid}"
+
+    # Define markers for this packing session using the generated UUID
+    define_markers "$archive_uuid"
+
+    # Iterate through all command-line arguments (files/directories)
     for item in "$@"; do
         if [ -f "$item" ]; then
-            # If it's a file, skip poetry.lock, hidden files or files ending with .pak.
-            if [[ "$(basename "$item")" == "poetry.lock" || "$(basename "$item")" == .* || "$item" == *.pak ]]; then
+            # If it's a regular file, check against explicit exclusions
+            local base_item
+            base_item=$(basename "$item")
+            if [[ "$base_item" == "poetry.lock" || "$base_item" == .* || "$item" == *.pak ]]; then
+                echo "Info: Skipping excluded file '$item'." >&2
                 continue
             fi
-            pack_file "$item"
+            # Pack the file, passing the archive UUID
+            pack_file "$item" "$archive_uuid"
         elif [ -d "$item" ]; then
-            # Use find to recursively process files.
+            # If it's a directory, use find to locate files within it
             # Place -mindepth immediately after the directory argument to prevent warnings.
+            # Exclude specified directories and file patterns.
+            # Use -print0 and read -d $'\0' for robust handling of filenames with special characters.
             find "$item" -mindepth 1 \
-                \( -name "node_modules" -o -name "__pycache__" -o -name "python" -o -name "*.dist-info" -o -name "venv" -o -name ".venv" -o -name "htmlcov" \) -prune -o \
-                \( -type f ! -name "*.pak" ! -name "poetry.lock" ! -path "*/.*" -print \) | while IFS= read -r file; do
-                    pack_file "$file"
-                done
+                 \( -name "node_modules" -o -name "__pycache__" -o -name "python" -o -name "*.dist-info" -o -name "venv" -o -name ".venv" -o -name "htmlcov" -o -path "*/.git" -o -path "*/.svn" -o -path "*/.hg" \) -prune -o \
+                 \( -type f ! -name "*.pak" ! -name "poetry.lock" ! -path "*/.*" -print0 \) | while IFS= read -r -d $'\0' file; do
+                 # Pack each found file, passing the archive UUID
+                 pack_file "$file" "$archive_uuid"
+            done
         else
+            # Warn if the item is neither a file nor a directory
             echo "Warning: '$item' is not a file or directory. Skipped." >&2
         fi
     done
 }
 
-# List mode: display archive metadata.
+# List mode: display archive metadata in the format "filepath/filename and Size: XXX".
+# Reads the archive file specified.
+# Args:
+#   $1: The path to the archive file (.pak).
 list_archive() {
     local archive="$1"
     if [ ! -f "$archive" ]; then
         echo "Archive file not found: $archive" >&2
         exit 1
     fi
-    awk -v FILE_START="$PAK_FILE_START" -v DATA_START="$PAK_DATA_START" '
-    BEGIN { OFS="\t" }
-    $0 == FILE_START { header = 1; next }
-    header && /^Path: / { path = substr($0, index($0," ")+1); next }
-    header && /^Size: / { size = substr($0, index($0," ")+1); next }
-    header && /^Lines: / { lines = substr($0, index($0," ")+1); next }
-    header && $0 == DATA_START {
-         print path, size, lines;
-         header = 0;
-         next;
-    }
-    ' "$archive"
+
+    # Read the first line to get the UUID
+    local first_line
+    if ! read -r first_line < "$archive"; then
+        echo "Error: Could not read archive file: $archive" >&2
+        exit 1
+    fi
+
+    local archive_uuid=""
+    # Check if the first line is the UUID header
+    if [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then
+        # Extract the UUID
+        archive_uuid="${first_line#${PAK_UUID_LINE_PREFIX}}"
+    else
+        # Assume old format or invalid file if no UUID header
+        echo "Warning: Archive file '${archive}' does not start with a UUID header. Attempting to parse with default markers (may fail)." >&2
+        # Use a placeholder UUID to generate default markers for attempting to parse older formats
+        define_markers "LEGACY_PLACEHOLDER"
+        # Note: We don't set archive_uuid here, the 'else' block below handles processing without tail
+    fi
+
+    # Define markers based on the read UUID (if found)
+    if [ -n "$archive_uuid" ]; then
+         define_markers "$archive_uuid"
+         # Process the file starting from the 2nd line using awk
+         # Pass the dynamic markers to awk
+         tail -n +2 "$archive" | awk -v FILE_START="$PAK_FILE_START" -v DATA_START="$PAK_DATA_START" '
+         # When a file start marker is found, set header flag
+         $0 == FILE_START { header = 1; next }
+         # If in header and line starts with "Path: ", extract path
+         header && /^Path: / { path = substr($0, index($0," ")+1); next }
+         # If in header and line starts with "Size: ", extract size
+         header && /^Size: / { size = substr($0, index($0," ")+1); next }
+         # If in header and line starts with "Lines: ", extract lines (but dont use)
+         header && /^Lines: / { next } # Skip lines data for output
+         # If in header and data start marker is found, print collected metadata in the desired format and reset header flag
+         header && $0 == DATA_START {
+             # MODIFIED: Use printf for formatted output
+             printf "%s and Size: %s\n", path, size;
+             header = 0;
+             next;
+         }
+         '
+    else
+         # Fallback awk for old format (or if UUID header was missing)
+         # Process the entire file from the beginning
+         awk -v FILE_START="$PAK_FILE_START" -v DATA_START="$PAK_DATA_START" '
+         $0 == FILE_START { header = 1; next }
+         header && /^Path: / { path = substr($0, index($0," ")+1); next }
+         header && /^Size: / { size = substr($0, index($0," ")+1); next }
+         header && /^Lines: / { next } # Skip lines data for output
+         header && $0 == DATA_START {
+             # MODIFIED: Use printf for formatted output
+             printf "%s and Size: %s\n", path, size;
+             header = 0;
+             next;
+         }
+         ' "$archive"
+    fi
 }
 
 # Unpack mode: read the archive and recreate the files/directories.
+# Reads the archive file specified and writes files to the current directory.
+# Args:
+#   $1: The path to the archive file (.pak).
 unpack_archive() {
     local archive="$1"
     if [ ! -f "$archive" ]; then
         echo "Archive file not found: $archive" >&2
         exit 1
     fi
-    local current_file=""
-    local in_data=0
-    while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in
-            "$PAK_FILE_START")
-                current_file=""
-                ;;
-            "Path:"*)
-                current_file="${line#Path: }"
-                ;;
-            "$PAK_DATA_START")
-                mkdir -p "$(dirname "$current_file")"
-                : > "$current_file"
-                in_data=1
-                ;;
-            "$PAK_DATA_END")
-                in_data=0
-                ;;
-            *)
-                if [ "$in_data" -eq 1 ]; then
-                    echo "$line" >> "$current_file"
-                fi
-                ;;
-        esac
-    done < "$archive"
+
+    # Read the first line to get the UUID
+    local first_line
+     if ! read -r first_line < "$archive"; then
+         echo "Error: Could not read archive file: $archive" >&2
+         exit 1
+    fi
+
+    local archive_uuid=""
+    # Check for the UUID header
+    if [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then
+        archive_uuid="${first_line#${PAK_UUID_LINE_PREFIX}}"
+    else
+        # Assume old format or invalid file if no UUID header
+        echo "Warning: Archive file '${archive}' does not start with a UUID header. Attempting to parse with default markers (may fail)." >&2
+        # Use a placeholder UUID for markers
+        define_markers "LEGACY_PLACEHOLDER"
+    fi
+
+    # Define markers based on the read UUID (or placeholder)
+     if [ -n "$archive_uuid" ]; then
+         define_markers "$archive_uuid"
+         # Use tail -n +2 to skip the UUID header line when reading the rest of the archive
+         # Process line by line, using '|| [ -n "$line" ]' to handle the last line if it lacks a newline
+         tail -n +2 "$archive" | while IFS= read -r line || [ -n "$line" ]; do
+             case "$line" in
+                 "$PAK_FILE_START")
+                     # Reset current file path when a new file block starts
+                     current_file=""
+                     in_data=0 # Ensure we are not in data mode
+                     ;;
+                 "Path:"*)
+                     # Extract the file path
+                     current_file="${line#Path: }"
+                     ;;
+                 "$PAK_DATA_START")
+                     # When data block starts:
+                     if [ -n "$current_file" ]; then # Ensure current_file is set
+                         # Create the directory if it doesn't exist
+                         mkdir -p "$(dirname "$current_file")"
+                         # Truncate or create the file
+                         : > "$current_file"
+                         # Set flag indicating we are now processing file data
+                         in_data=1
+                     else
+                         # Safety check: Should not happen in a valid archive
+                         echo "Warning: Found ${PAK_DATA_START} without preceding Path. Skipping data block." >&2
+                         in_data=0 # Avoid writing data to unknown file
+                     fi
+                     ;;
+                 "$PAK_DATA_END")
+                     # End of data block for the current file
+                     in_data=0
+                     ;;
+                 *)
+                     # If we are inside a data block, append the line to the current file
+                     if [ "$in_data" -eq 1 ]; then
+                         # Use printf to write the line followed by a newline.
+                         # Note: This adds a newline after each line read from the archive data block.
+                         # This might differ from original file line endings (\n vs \r\n)
+                         # or add a newline to the last line if original file didn't have one.
+                         # For LLM text processing, this line-by-line representation is usually fine.
+                         printf "%s\n" "$line" >> "$current_file"
+                     fi
+                     ;;
+             esac
+         done
+     else
+         # Fallback while loop for old format (or if UUID header was missing)
+         # Read the entire file from the beginning
+         while IFS= read -r line || [ -n "$line" ]; do
+             case "$line" in
+                 "$PAK_FILE_START")
+                     current_file=""
+                     in_data=0
+                     ;;
+                 "Path:"*)
+                     current_file="${line#Path: }"
+                     ;;
+                 "$PAK_DATA_START")
+                      if [ -n "$current_file" ]; then # Ensure current_file is set
+                          mkdir -p "$(dirname "$current_file")"
+                          : > "$current_file" # Truncate or create file
+                          in_data=1
+                      else
+                          echo "Warning: Found ${PAK_DATA_START} without preceding Path. Skipping data block." >&2
+                          in_data=0 # Avoid writing data to unknown file
+                      fi
+                     ;;
+                 "$PAK_DATA_END")
+                     in_data=0
+                     ;;
+                 *)
+                     if [ "$in_data" -eq 1 ]; then
+                         # Use printf for consistency with new format logic
+                         printf "%s\n" "$line" >> "$current_file"
+                     fi
+                     ;;
+             esac
+         done < "$archive"
+     fi
+     echo "Unpacking complete."
 }
 
-# Default to pack mode if the first argument does not start with "--".
+# --- Main Script Logic ---
+
+# Display usage if no arguments are provided
 if [ "$#" -eq 0 ]; then
     echo "Usage:" >&2
     echo "  Pack (default): $0 [--pack] <files/directories> > archive.pak" >&2
-    echo "  List:         $0 --ls <archive file>" >&2
-    echo "  Unpack:       $0 --unpack <archive file>" >&2
-    echo "  Version:      $0 --version" >&2
+    echo "  List:           $0 --ls <archive file>" >&2
+    echo "  Unpack:         $0 --unpack <archive file>" >&2
+    echo "  Version:        $0 --version" >&2
     exit 1
 fi
 
+# Default to pack mode if the first argument does not start with "--".
+# This allows calling like `pak file1 dir1 > archive.pak`
 if [[ "$1" != --* ]]; then
+    # Prepend '--pack' to the arguments list
     set -- --pack "$@"
 fi
 
-# Main command dispatch.
+# Main command dispatch based on the first argument.
 case "$1" in
     --pack)
-        shift
-        pack "$@"
+        shift # Remove the --pack argument
+        pack "$@" # Pass remaining arguments to the pack function
         ;;
     --ls)
-        if [ -z "$2" ]; then
+        if [ -z "$2" ]; then # Check if archive file argument is provided
             echo "Usage: $0 --ls <archive file>" >&2
             exit 1
         fi
         list_archive "$2"
         ;;
     --unpack)
-        if [ -z "$2" ]; then
+        if [ -z "$2" ]; then # Check if archive file argument is provided
             echo "Usage: $0 --unpack <archive file>" >&2
             exit 1
         fi
@@ -177,12 +383,15 @@ case "$1" in
         echo "pak version $VERSION"
         exit 0
         ;;
-    *)
+    *) # Handle unknown options
+        echo "Error: Unknown option '$1'." >&2
         echo "Usage:" >&2
         echo "  Pack (default): $0 [--pack] <files/directories> > archive.pak" >&2
-        echo "  List:         $0 --ls <archive file>" >&2
-        echo "  Unpack:       $0 --unpack <archive file>" >&2
-        echo "  Version:      $0 --version" >&2
+        echo "  List:           $0 --ls <archive file>" >&2
+        echo "  Unpack:         $0 --unpack <archive file>" >&2
+        echo "  Version:        $0 --version" >&2
         exit 1
         ;;
 esac
+
+exit 0 # Explicitly exit with success status
