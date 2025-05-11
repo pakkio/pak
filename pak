@@ -2,9 +2,17 @@
 # A text-based packer that bundles files (with metadata) into a single archive.
 # Output is designed to be easily parsed text, suitable for LLMs.
 #
-# Version: 1.2.2
+# Version: 1.4.0
 #
 # Changes in this version:
+#  - Added regex pattern support with --include-regex and --exclude-regex
+#  - Added archive verification with --verify
+#  - Added extraction to specified directory with --outdir
+#  - Added selective extraction with --include and --exclude options
+#  - Support for multiple include/exclude patterns
+#  - Improved unpack performance on network filesystems (like Google Drive in WSL2)
+#  - Added better debug messages during unpacking
+#  - Included local file caching for archive during unpacking
 #  - Modified --ls output format to "filepath/filename and Size: XXX".
 #  - Modified --ls output to show only Path and Size (removed Lines).
 #  - Uses a unique UUID in markers to prevent collision with file content.
@@ -24,12 +32,26 @@
 #   List:
 #       pak --ls <archive file>  # Outputs "filepath/filename and Size: XXX"
 #   Unpack:
-#       pak --unpack <archive file>
+#       pak --unpack <archive file> [--include pattern] [--exclude pattern] [--outdir dir]
+#   Verify:
+#       pak --verify <archive file>
 #   Version:
 #       pak --version
+#
+# Examples:
+#   Extract only Python files:
+#       pak --unpack archive.pak --include "*.py"
+#   Extract all except text files:
+#       pak --unpack archive.pak --exclude "*.txt"
+#   Extract files matching regex:
+#       pak --unpack archive.pak --include-regex "NPC\.[a-z]+\..*\.txt"
+#   Extract to specific directory:
+#       pak --unpack archive.pak --outdir /path/to/extract
+#   Multiple patterns:
+#       pak --unpack archive.pak --include "*.py" --include "*.md" --exclude "test_*.py"
 
 # Version information
-VERSION="1.2.2" # Incremented version for the change
+VERSION="1.4.0" # Incremented version for new features
 
 # Check for uuidgen dependency (only needed for packing)
 check_uuidgen() {
@@ -226,129 +248,507 @@ list_archive() {
     fi
 }
 
-# Unpack mode: read the archive and recreate the files/directories.
-# Reads the archive file specified and writes files to the current directory.
+# Function to check if a file path matches any glob pattern in an array
+# Args:
+#   $1: File path to check
+#   $2+: Array of patterns to match against
+matches_any_glob_pattern() {
+    local file_path="$1"
+    shift
+    local patterns=("$@")
+    
+    for pattern in "${patterns[@]}"; do
+        if [[ "$file_path" == $pattern ]]; then
+            return 0 # Match found
+        fi
+    done
+    return 1 # No match
+}
+
+# Function to check if a file path matches any regex pattern in an array
+# Args:
+#   $1: File path to check
+#   $2+: Array of regex patterns to match against
+matches_any_regex_pattern() {
+    local file_path="$1"
+    shift
+    local patterns=("$@")
+    
+    for pattern in "${patterns[@]}"; do
+        if [[ "$file_path" =~ $pattern ]]; then
+            return 0 # Match found
+        fi
+    done
+    return 1 # No match
+}
+
+# Function to verify the integrity of an archive
 # Args:
 #   $1: The path to the archive file (.pak).
-unpack_archive() {
+verify_archive() {
     local archive="$1"
+    echo "Verifica dell'archivio '$archive'..." # Debug message
+    
     if [ ! -f "$archive" ]; then
-        echo "Archive file not found: $archive" >&2
+        echo "Errore: File di archivio non trovato: $archive" >&2
         exit 1
+    fi
+
+    # Copia temporanea locale per migliorare le prestazioni su file system di rete
+    local temp_dir="/tmp/pak_temp_verify_$(date +%s)"
+    local temp_archive="${temp_dir}/$(basename "$archive")"
+    
+    echo "Creazione directory temporanea: $temp_dir" # Debug message
+    mkdir -p "$temp_dir"
+    
+    echo "Copiando l'archivio localmente per migliorare le prestazioni..." # Debug message
+    cp "$archive" "$temp_archive"
+    
+    if [ ! -f "$temp_archive" ]; then
+        echo "Errore nella copia temporanea. Utilizzo dell'originale." >&2
+        temp_archive="$archive"
+    else
+        echo "Archivio copiato con successo in $temp_archive" # Debug message
     fi
 
     # Read the first line to get the UUID
     local first_line
-     if ! read -r first_line < "$archive"; then
-         echo "Error: Could not read archive file: $archive" >&2
-         exit 1
+    if ! read -r first_line < "$temp_archive"; then
+        echo "Errore: Non è possibile leggere il file di archivio: $temp_archive" >&2
+        rm -rf "$temp_dir" # Cleanup
+        exit 1
     fi
 
     local archive_uuid=""
     # Check for the UUID header
     if [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then
         archive_uuid="${first_line#${PAK_UUID_LINE_PREFIX}}"
+        echo "UUID dell'archivio: $archive_uuid" # Debug message
+    else
+        echo "Errore: L'archivio non inizia con un header UUID valido." >&2
+        rm -rf "$temp_dir" # Cleanup
+        exit 1
+    fi
+
+    # Define markers based on the read UUID
+    define_markers "$archive_uuid"
+    echo "Verifica della struttura dell'archivio..." # Debug message
+
+    # Variabili per la verifica
+    local total_files=0
+    local valid_files=0
+    local invalid_files=0
+    local current_state="INIT" # Stati possibili: INIT, HEADER, DATA
+    local current_file=""
+    local current_size=""
+    local data_lines=0
+    local error_found=false
+    
+    # Processo di verifica: leggiamo tutte le linee dell'archivio in memoria
+    echo "Lettura dell'archivio in memoria..." # Debug message
+    mapfile -t all_lines < <(tail -n +2 "$temp_archive")
+    echo "Lette ${#all_lines[@]} linee dall'archivio." # Debug message
+    
+    for line in "${all_lines[@]}"; do
+        case "$current_state" in
+            "INIT")
+                if [[ "$line" == "$PAK_FILE_START" ]]; then
+                    current_state="HEADER"
+                    current_file=""
+                    current_size=""
+                    total_files=$((total_files + 1))
+                else
+                    echo "Errore: Trovata linea inaspettata in stato INIT: '$line'" >&2
+                    error_found=true
+                fi
+                ;;
+            "HEADER")
+                if [[ "$line" == "Path:"* ]]; then
+                    current_file="${line#Path: }"
+                elif [[ "$line" == "Size:"* ]]; then
+                    current_size="${line#Size: }"
+                elif [[ "$line" == "Lines:"* ]]; then
+                    # Ignoriamo il campo Lines per la verifica
+                    :
+                elif [[ "$line" == "$PAK_DATA_START" ]]; then
+                    if [ -z "$current_file" ] || [ -z "$current_size" ]; then
+                        echo "Errore: Metadati incompleti per un file (Path: '$current_file', Size: '$current_size')" >&2
+                        invalid_files=$((invalid_files + 1))
+                        error_found=true
+                    fi
+                    current_state="DATA"
+                    data_lines=0
+                else
+                    echo "Errore: Linea di header non riconosciuta: '$line'" >&2
+                    error_found=true
+                fi
+                ;;
+            "DATA")
+                if [[ "$line" == "$PAK_DATA_END" ]]; then
+                    current_state="INIT"
+                    valid_files=$((valid_files + 1))
+                else
+                    data_lines=$((data_lines + 1))
+                fi
+                ;;
+        esac
+    done
+    
+    # Controlla lo stato finale
+    if [ "$current_state" != "INIT" ]; then
+        echo "Errore: L'archivio termina in uno stato incompleto ($current_state)" >&2
+        error_found=true
+        invalid_files=$((invalid_files + 1))
+    fi
+    
+    # Pulizia
+    rm -rf "$temp_dir"
+    
+    # Risultato della verifica
+    echo "----------------------------------------"
+    echo "Risultati della verifica dell'archivio:"
+    echo "----------------------------------------"
+    echo "File totali trovati: $total_files"
+    echo "File validi: $valid_files"
+    echo "File non validi: $invalid_files"
+    
+    if $error_found; then
+        echo "VERIFICA FALLITA: Sono stati trovati errori nell'archivio."
+        return 1
+    else
+        echo "VERIFICA COMPLETATA CON SUCCESSO: L'archivio è integro."
+        return 0
+    fi
+}
+
+# Unpack mode: read the archive and recreate the files/directories.
+# Reads the archive file specified and writes files to the current directory or to specified outdir.
+# Args:
+#   $1: The path to the archive file (.pak).
+#   $2: (Optional) Output directory for extraction
+unpack_archive() {
+    local archive="$1"
+    local outdir="${2:-.}" # Default to current directory if not specified
+    
+    echo "Iniziando l'estrazione di '$archive'..." # Debug message
+    
+    if [ ! -f "$archive" ]; then
+        echo "Archive file not found: $archive" >&2
+        exit 1
+    fi
+    
+    # Ensure output directory exists
+    if [ ! -d "$outdir" ]; then
+        echo "Creazione directory di output: $outdir" # Debug message
+        mkdir -p "$outdir"
+        if [ $? -ne 0 ]; then
+            echo "Errore: Impossibile creare la directory di output '$outdir'" >&2
+            exit 1
+        fi
+    fi
+
+    # Print include and exclude patterns if specified
+    if [ ${#INCLUDE_PATTERNS[@]} -gt 0 ]; then
+        echo "Inclusion patterns (glob): ${INCLUDE_PATTERNS[*]}"
+    fi
+    if [ ${#EXCLUDE_PATTERNS[@]} -gt 0 ]; then
+        echo "Exclusion patterns (glob): ${EXCLUDE_PATTERNS[*]}"
+    fi
+    if [ ${#INCLUDE_REGEX[@]} -gt 0 ]; then
+        echo "Inclusion patterns (regex): ${INCLUDE_REGEX[*]}"
+    fi
+    if [ ${#EXCLUDE_REGEX[@]} -gt 0 ]; then
+        echo "Exclusion patterns (regex): ${EXCLUDE_REGEX[*]}"
+    fi
+
+    # Copia temporanea locale per migliorare le prestazioni su file system di rete
+    local temp_dir="/tmp/pak_temp_$(date +%s)"
+    local temp_archive="${temp_dir}/$(basename "$archive")"
+    
+    echo "Creazione directory temporanea: $temp_dir" # Debug message
+    mkdir -p "$temp_dir"
+    
+    echo "Copiando l'archivio localmente per migliorare le prestazioni..." # Debug message
+    cp "$archive" "$temp_archive"
+    
+    if [ ! -f "$temp_archive" ]; then
+        echo "Errore nella copia temporanea. Utilizzo dell'originale." >&2
+        temp_archive="$archive"
+    else
+        echo "Archivio copiato con successo in $temp_archive" # Debug message
+    fi
+
+    # Read the first line to get the UUID
+    local first_line
+    if ! read -r first_line < "$temp_archive"; then
+        echo "Error: Could not read archive file: $temp_archive" >&2
+        rm -rf "$temp_dir" # Cleanup
+        exit 1
+    fi
+
+    local archive_uuid=""
+    # Check for the UUID header
+    if [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then
+        archive_uuid="${first_line#${PAK_UUID_LINE_PREFIX}}"
+        echo "UUID dell'archivio: $archive_uuid" # Debug message
     else
         # Assume old format or invalid file if no UUID header
-        echo "Warning: Archive file '${archive}' does not start with a UUID header. Attempting to parse with default markers (may fail)." >&2
+        echo "Warning: Archive file '${temp_archive}' does not start with a UUID header. Attempting to parse with default markers (may fail)." >&2
         # Use a placeholder UUID for markers
         define_markers "LEGACY_PLACEHOLDER"
     fi
 
     # Define markers based on the read UUID (or placeholder)
-     if [ -n "$archive_uuid" ]; then
-         define_markers "$archive_uuid"
-         # Use tail -n +2 to skip the UUID header line when reading the rest of the archive
-         # Process line by line, using '|| [ -n "$line" ]' to handle the last line if it lacks a newline
-         tail -n +2 "$archive" | while IFS= read -r line || [ -n "$line" ]; do
-             case "$line" in
-                 "$PAK_FILE_START")
-                     # Reset current file path when a new file block starts
-                     current_file=""
-                     in_data=0 # Ensure we are not in data mode
-                     ;;
-                 "Path:"*)
-                     # Extract the file path
-                     current_file="${line#Path: }"
-                     ;;
-                 "$PAK_DATA_START")
-                     # When data block starts:
-                     if [ -n "$current_file" ]; then # Ensure current_file is set
-                         # Create the directory if it doesn't exist
-                         mkdir -p "$(dirname "$current_file")"
-                         # Truncate or create the file
-                         : > "$current_file"
-                         # Set flag indicating we are now processing file data
-                         in_data=1
-                     else
-                         # Safety check: Should not happen in a valid archive
-                         echo "Warning: Found ${PAK_DATA_START} without preceding Path. Skipping data block." >&2
-                         in_data=0 # Avoid writing data to unknown file
-                     fi
-                     ;;
-                 "$PAK_DATA_END")
-                     # End of data block for the current file
-                     in_data=0
-                     ;;
-                 *)
-                     # If we are inside a data block, append the line to the current file
-                     if [ "$in_data" -eq 1 ]; then
-                         # Use printf to write the line followed by a newline.
-                         # Note: This adds a newline after each line read from the archive data block.
-                         # This might differ from original file line endings (\n vs \r\n)
-                         # or add a newline to the last line if original file didn't have one.
-                         # For LLM text processing, this line-by-line representation is usually fine.
-                         printf "%s\n" "$line" >> "$current_file"
-                     fi
-                     ;;
-             esac
-         done
-     else
-         # Fallback while loop for old format (or if UUID header was missing)
-         # Read the entire file from the beginning
-         while IFS= read -r line || [ -n "$line" ]; do
-             case "$line" in
-                 "$PAK_FILE_START")
-                     current_file=""
-                     in_data=0
-                     ;;
-                 "Path:"*)
-                     current_file="${line#Path: }"
-                     ;;
-                 "$PAK_DATA_START")
-                      if [ -n "$current_file" ]; then # Ensure current_file is set
-                          mkdir -p "$(dirname "$current_file")"
-                          : > "$current_file" # Truncate or create file
-                          in_data=1
-                      else
-                          echo "Warning: Found ${PAK_DATA_START} without preceding Path. Skipping data block." >&2
-                          in_data=0 # Avoid writing data to unknown file
-                      fi
-                     ;;
-                 "$PAK_DATA_END")
-                     in_data=0
-                     ;;
-                 *)
-                     if [ "$in_data" -eq 1 ]; then
-                         # Use printf for consistency with new format logic
-                         printf "%s\n" "$line" >> "$current_file"
-                     fi
-                     ;;
-             esac
-         done < "$archive"
-     fi
-     echo "Unpacking complete."
+    if [ -n "$archive_uuid" ]; then
+        define_markers "$archive_uuid"
+        echo "Elaborazione dell'archivio..." # Debug message
+        
+        # Use tail -n +2 to skip the UUID header line when reading the rest of the archive
+        # Process line by line, using '|| [ -n "$line" ]' to handle the last line if it lacks a newline
+        
+        # Processo ottimizzato: prima leggiamo tutte le linee dell'archivio in memoria
+        echo "Lettura dell'archivio in memoria..." # Debug message
+        mapfile -t all_lines < <(tail -n +2 "$temp_archive")
+        echo "Lette ${#all_lines[@]} linee dall'archivio." # Debug message
+        
+        local current_file=""
+        local in_data=0
+        local files_extracted=0
+        local files_skipped=0
+        
+        for line in "${all_lines[@]}"; do
+            case "$line" in
+                "$PAK_FILE_START")
+                    # Reset current file path when a new file block starts
+                    current_file=""
+                    in_data=0 # Ensure we are not in data mode
+                    ;;
+                "Path:"*)
+                    # Extract the file path
+                    current_file="${line#Path: }"
+                    echo "Trovato file: $current_file" # Debug message
+                    
+                    # Check if file should be included/excluded
+                    local should_extract=true
+                    
+                    # If include patterns (glob) are specified, file must match at least one
+                    if [ ${#INCLUDE_PATTERNS[@]} -gt 0 ]; then
+                        should_extract=false
+                        if matches_any_glob_pattern "$current_file" "${INCLUDE_PATTERNS[@]}"; then
+                            should_extract=true
+                        fi
+                    fi
+                    
+                    # If include patterns (regex) are specified and file isn't already matched, check regex
+                    if [ ${#INCLUDE_REGEX[@]} -gt 0 ] && ! $should_extract; then
+                        if matches_any_regex_pattern "$current_file" "${INCLUDE_REGEX[@]}"; then
+                            should_extract=true
+                        fi
+                    fi
+                    
+                    # If no include patterns matched and at least one include pattern was specified, skip
+                    if [ ${#INCLUDE_PATTERNS[@]} -gt 0 ] || [ ${#INCLUDE_REGEX[@]} -gt 0 ]; then
+                        if ! $should_extract; then
+                            current_file="__SKIP__"
+                            files_skipped=$((files_skipped + 1))
+                            echo "File escluso (non corrisponde ai pattern di inclusione): ${line#Path: }" # Debug message
+                            continue
+                        fi
+                    fi
+                    
+                    # If file is marked for extraction but matches an exclude glob pattern, skip it
+                    if $should_extract && [ ${#EXCLUDE_PATTERNS[@]} -gt 0 ]; then
+                        if matches_any_glob_pattern "$current_file" "${EXCLUDE_PATTERNS[@]}"; then
+                            current_file="__SKIP__"
+                            files_skipped=$((files_skipped + 1))
+                            echo "File escluso (corrisponde a un pattern di esclusione glob): ${line#Path: }" # Debug message
+                            continue
+                        fi
+                    fi
+                    
+                    # If file is marked for extraction but matches an exclude regex pattern, skip it
+                    if $should_extract && [ ${#EXCLUDE_REGEX[@]} -gt 0 ]; then
+                        if matches_any_regex_pattern "$current_file" "${EXCLUDE_REGEX[@]}"; then
+                            current_file="__SKIP__"
+                            files_skipped=$((files_skipped + 1))
+                            echo "File escluso (corrisponde a un pattern di esclusione regex): ${line#Path: }" # Debug message
+                            continue
+                        fi
+                    fi
+                    ;;
+                "$PAK_DATA_START")
+                    # When data block starts:
+                    if [ -n "$current_file" ] && [ "$current_file" != "__SKIP__" ]; then
+                        # Create the full output path by combining outdir with the file path
+                        local full_output_path="${outdir}/${current_file}"
+                        # Create the directory if it doesn't exist
+                        mkdir -p "$(dirname "$full_output_path")"
+                        # Truncate or create the file
+                        : > "$full_output_path"
+                        # Set flag indicating we are now processing file data
+                        in_data=1
+                        echo "Estrazione di: $current_file in $full_output_path" # Debug message
+                    else
+                        # Skip this data block (either no path or marked for skipping)
+                        in_data=0
+                    fi
+                    ;;
+                "$PAK_DATA_END")
+                    # End of data block for the current file
+                    if [ "$in_data" -eq 1 ]; then
+                        files_extracted=$((files_extracted + 1))
+                        echo "File estratto: $current_file (Totale: $files_extracted)" # Debug message
+                    fi
+                    in_data=0
+                    ;;
+                *)
+                    # If we are inside a data block and file is not marked to skip, append the line to the current file
+                    if [ "$in_data" -eq 1 ]; then
+                        # Use printf to write the line followed by a newline.
+                        local full_output_path="${outdir}/${current_file}"
+                        printf "%s\n" "$line" >> "$full_output_path"
+                    fi
+                    ;;
+            esac
+        done
+        
+        echo "Estrazione completata: $files_extracted file estratti, $files_skipped file saltati."
+    else
+        echo "Fallback all'elaborazione dell'archivio riga per riga..." # Debug message
+        # Fallback while loop for old format (or if UUID header was missing)
+        # Read the entire file from the beginning
+        local current_file=""
+        local in_data=0
+        local files_extracted=0
+        local files_skipped=0
+        
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                "$PAK_FILE_START")
+                    current_file=""
+                    in_data=0
+                    ;;
+                "Path:"*)
+                    current_file="${line#Path: }"
+                    echo "Trovato file: $current_file" # Debug message
+                    
+                    # Check if file should be included/excluded (same logic as above)
+                    local should_extract=true
+                    
+                    # If include patterns (glob) are specified, file must match at least one
+                    if [ ${#INCLUDE_PATTERNS[@]} -gt 0 ]; then
+                        should_extract=false
+                        if matches_any_glob_pattern "$current_file" "${INCLUDE_PATTERNS[@]}"; then
+                            should_extract=true
+                        fi
+                    fi
+                    
+                    # If include patterns (regex) are specified and file isn't already matched, check regex
+                    if [ ${#INCLUDE_REGEX[@]} -gt 0 ] && ! $should_extract; then
+                        if matches_any_regex_pattern "$current_file" "${INCLUDE_REGEX[@]}"; then
+                            should_extract=true
+                        fi
+                    fi
+                    
+                    # If no include patterns matched and at least one include pattern was specified, skip
+                    if [ ${#INCLUDE_PATTERNS[@]} -gt 0 ] || [ ${#INCLUDE_REGEX[@]} -gt 0 ]; then
+                        if ! $should_extract; then
+                            current_file="__SKIP__"
+                            files_skipped=$((files_skipped + 1))
+                            echo "File escluso (non corrisponde ai pattern di inclusione): ${line#Path: }" # Debug message
+                            continue
+                        fi
+                    fi
+                    
+                    # If file is marked for extraction but matches an exclude glob pattern, skip it
+                    if $should_extract && [ ${#EXCLUDE_PATTERNS[@]} -gt 0 ]; then
+                        if matches_any_glob_pattern "$current_file" "${EXCLUDE_PATTERNS[@]}"; then
+                            current_file="__SKIP__"
+                            files_skipped=$((files_skipped + 1))
+                            echo "File escluso (corrisponde a un pattern di esclusione glob): ${line#Path: }" # Debug message
+                            continue
+                        fi
+                    fi
+                    
+                    # If file is marked for extraction but matches an exclude regex pattern, skip it
+                    if $should_extract && [ ${#EXCLUDE_REGEX[@]} -gt 0 ]; then
+                        if matches_any_regex_pattern "$current_file" "${EXCLUDE_REGEX[@]}"; then
+                            current_file="__SKIP__"
+                            files_skipped=$((files_skipped + 1))
+                            echo "File escluso (corrisponde a un pattern di esclusione regex): ${line#Path: }" # Debug message
+                            continue
+                        fi
+                    fi
+                    ;;
+                "$PAK_DATA_START")
+                    if [ -n "$current_file" ] && [ "$current_file" != "__SKIP__" ]; then
+                        # Create the full output path by combining outdir with the file path
+                        local full_output_path="${outdir}/${current_file}"
+                        # Create the directory if it doesn't exist
+                        mkdir -p "$(dirname "$full_output_path")"
+                        # Truncate or create the file
+                        : > "$full_output_path"
+                        in_data=1
+                        echo "Estrazione di: $current_file in $full_output_path" # Debug message
+                    else
+                        in_data=0 # Skip this data block
+                    fi
+                    ;;
+                "$PAK_DATA_END")
+                    if [ "$in_data" -eq 1 ]; then
+                        files_extracted=$((files_extracted + 1))
+                        echo "File estratto: $current_file (Totale: $files_extracted)" # Debug message
+                    fi
+                    in_data=0
+                    ;;
+                *)
+                    if [ "$in_data" -eq 1 ]; then
+                        # Use printf for consistency with new format logic
+                        local full_output_path="${outdir}/${current_file}"
+                        printf "%s\n" "$line" >> "$full_output_path"
+                    fi
+                    ;;
+            esac
+        done < "$temp_archive"
+        
+        echo "Estrazione completata: $files_extracted file estratti, $files_skipped file saltati."
+    fi
+    
+    # Pulizia
+    echo "Pulizia dei file temporanei..." # Debug message
+    rm -rf "$temp_dir"
+    echo "Estrazione completata con successo. Estratti $files_extracted file nella directory '$outdir'."
 }
 
 # --- Main Script Logic ---
+
+# Initialize arrays for include and exclude patterns
+INCLUDE_PATTERNS=()
+EXCLUDE_PATTERNS=()
+INCLUDE_REGEX=()
+EXCLUDE_REGEX=()
+OUTPUT_DIR="."
 
 # Display usage if no arguments are provided
 if [ "$#" -eq 0 ]; then
     echo "Usage:" >&2
     echo "  Pack (default): $0 [--pack] <files/directories> > archive.pak" >&2
     echo "  List:           $0 --ls <archive file>" >&2
-    echo "  Unpack:         $0 --unpack <archive file>" >&2
+    echo "  Unpack:         $0 --unpack <archive file> [--include pattern] [--exclude pattern] [--outdir dir]" >&2
+    echo "  Verify:         $0 --verify <archive file>" >&2
     echo "  Version:        $0 --version" >&2
+    echo "" >&2
+    echo "Examples:" >&2
+    echo "  Extract only Python files:" >&2
+    echo "      $0 --unpack archive.pak --include \"*.py\"" >&2
+    echo "  Extract all except text files:" >&2
+    echo "      $0 --unpack archive.pak --exclude \"*.txt\"" >&2
+    echo "  Extract files matching regex:" >&2
+    echo "      $0 --unpack archive.pak --include-regex \"NPC\\.[a-z]+\\..*\\.txt\"" >&2
+    echo "  Extract to specific directory:" >&2
+    echo "      $0 --unpack archive.pak --outdir /path/to/extract" >&2
+    echo "  Multiple patterns:" >&2
+    echo "      $0 --unpack archive.pak --include \"*.py\" --include \"*.md\" --exclude \"test_*.py\"" >&2
     exit 1
 fi
 
@@ -359,36 +759,107 @@ if [[ "$1" != --* ]]; then
     set -- --pack "$@"
 fi
 
+# Capture original arguments
+ORIGINAL_ARGS=("$@")
+
+# Process arguments
+ARCHIVE_FILE=""
+COMMAND=""
+
 # Main command dispatch based on the first argument.
-case "$1" in
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
     --pack)
-        shift # Remove the --pack argument
         pack "$@" # Pass remaining arguments to the pack function
         ;;
     --ls)
-        if [ -z "$2" ]; then # Check if archive file argument is provided
+        if [ -z "$1" ]; then # Check if archive file argument is provided
             echo "Usage: $0 --ls <archive file>" >&2
             exit 1
         fi
-        list_archive "$2"
+        list_archive "$1"
         ;;
-    --unpack)
-        if [ -z "$2" ]; then # Check if archive file argument is provided
-            echo "Usage: $0 --unpack <archive file>" >&2
+    --verify)
+        if [ -z "$1" ]; then # Check if archive file argument is provided
+            echo "Usage: $0 --verify <archive file>" >&2
             exit 1
         fi
-        unpack_archive "$2"
+        verify_archive "$1"
+        ;;
+    --unpack)
+        if [ -z "$1" ]; then # Check if archive file argument is provided
+            echo "Usage: $0 --unpack <archive file> [--include pattern] [--exclude pattern] [--outdir dir]" >&2
+            exit 1
+        fi
+        ARCHIVE_FILE="$1"
+        shift
+        
+        # Process includes, excludes, and outdir
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --include)
+                    if [ -z "$2" ]; then
+                        echo "Error: --include requires a pattern" >&2
+                        exit 1
+                    fi
+                    INCLUDE_PATTERNS+=("$2")
+                    shift 2
+                    ;;
+                --exclude)
+                    if [ -z "$2" ]; then
+                        echo "Error: --exclude requires a pattern" >&2
+                        exit 1
+                    fi
+                    EXCLUDE_PATTERNS+=("$2")
+                    shift 2
+                    ;;
+                --include-regex)
+                    if [ -z "$2" ]; then
+                        echo "Error: --include-regex requires a pattern" >&2
+                        exit 1
+                    fi
+                    INCLUDE_REGEX+=("$2")
+                    shift 2
+                    ;;
+                --exclude-regex)
+                    if [ -z "$2" ]; then
+                        echo "Error: --exclude-regex requires a pattern" >&2
+                        exit 1
+                    fi
+                    EXCLUDE_REGEX+=("$2")
+                    shift 2
+                    ;;
+                --outdir)
+                    if [ -z "$2" ]; then
+                        echo "Error: --outdir requires a directory path" >&2
+                        exit 1
+                    fi
+                    OUTPUT_DIR="$2"
+                    shift 2
+                    ;;
+                *)
+                    echo "Error: Unknown option '$1'" >&2
+                    echo "Usage: $0 --unpack <archive file> [--include pattern] [--exclude pattern] [--outdir dir]" >&2
+                    exit 1
+                    ;;
+            esac
+        done
+        
+        unpack_archive "$ARCHIVE_FILE" "$OUTPUT_DIR"
         ;;
     --version)
         echo "pak version $VERSION"
         exit 0
         ;;
     *) # Handle unknown options
-        echo "Error: Unknown option '$1'." >&2
+        echo "Error: Unknown option '$COMMAND'." >&2
         echo "Usage:" >&2
         echo "  Pack (default): $0 [--pack] <files/directories> > archive.pak" >&2
         echo "  List:           $0 --ls <archive file>" >&2
-        echo "  Unpack:         $0 --unpack <archive file>" >&2
+        echo "  Unpack:         $0 --unpack <archive file> [--include pattern] [--exclude pattern] [--outdir dir]" >&2
+        echo "  Verify:         $0 --verify <archive file>" >&2
         echo "  Version:        $0 --version" >&2
         exit 1
         ;;
