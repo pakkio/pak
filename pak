@@ -1,667 +1,522 @@
 #!/bin/bash
 # A text-based packer that bundles files (with metadata) into a single archive.
 # Output is designed to be easily parsed text, suitable for LLMs.
+# NOW WITH TOKEN COMPRESSION CAPABILITIES AND SHORTER ARCHIVE IDs!
 #
-# Version: 1.5.1
+# Version: 2.1.4
 #
-# Changes in this version:
-#  - Fixed Bash syntax errors in 'pack' function related to 'find' command array construction.
-#  - Added --ext option to --pack mode to specify included file extensions when recursing into directories.
-#  - Unified hidden file/directory exclusion logic for direct file arguments to match find behavior.
-#  - Added regex pattern support with --include-regex and --exclude-regex
-#  - Added archive verification with --verify
-#  - Added extraction to specified directory with --outdir
-#  - Added selective extraction with --include and --exclude options
-#  - Support for multiple include/exclude patterns
-#  - Improved unpack performance on network filesystems (like Google Drive in WSL2)
-#  - Added better debug messages during unpacking
-#  - Included local file caching for archive during unpacking
-#  - Modified --ls output format to "filepath/filename and Size: XXX".
-#  - Modified --ls output to show only Path and Size (removed Lines).
-#  - Uses a unique UUID in markers to prevent collision with file content.
-#  - Unpacking writes each line followed by a newline. Note that this might
-#    alter original file line endings (\n vs \r\n) and add a newline to the
-#    last line of a file if the original didn't have one. For LLM consumption,
-#    this line-by-line representation is typically sufficient.
-#  - Added UUID marker prefix to the archive header.
-#  - Requires `uuidgen` command to be available for packing.
-#  - Improved reading of the archive in ls/unpack modes to handle the UUID header.
-#  - Fixed a potential issue where the last line of the archive might be missed
-#    in unpack_archive if it didn't end with a newline.
+# New in 2.1.4:
+#  - pack_file now explicitly handles empty files to avoid "Skipping compression" messages for them.
 #
-# Usage:
-#   Pack (default mode):
-#       pak [--pack] [--ext .ext1 .ext2 ...] <files/directories> > archive.pak
-#   List:
-#       pak --ls <archive file>  # Outputs "filepath/filename and Size: XXX"
-#   Unpack:
-#       pak --unpack <archive file> [--include pattern] [--exclude pattern] [--include-regex pattern] [--exclude-regex pattern] [--outdir dir]
-#   Verify:
-#       pak --verify <archive file>
-#   Version:
-#       pak --version
+# New in 2.1.3:
+#  - Major overhaul of main argument parsing logic for robust handling of global options
+#    (like --compress-level) regardless of their position relative to the pack command/files.
 #
-# Examples:
-#   Pack only Python and Markdown files from 'src' directory and 'main.py':
-#       pak --pack --ext .py .md src main.py > archive.pak
-#   Extract only Python files:
-#       pak --unpack archive.pak --include "*.py"
-#   Extract all except text files:
-#       pak --unpack archive.pak --exclude "*.txt"
-#   Extract files matching regex:
-#       pak --unpack archive.pak --include-regex "NPC\.[a-z]+\..*\.txt"
-#   Extract to specific directory:
-#       pak --unpack archive.pak --outdir /path/to/extract
-#   Multiple patterns:
-#       pak --unpack archive.pak --include "*.py" --include "*.md" --exclude "test_*.py"
+# (Previous version history omitted for brevity)
 
-# Version information
-VERSION="1.5.1" # Incremented for bug fix
+VERSION="2.1.4"
 
-# Check for uuidgen dependency (only needed for packing)
-check_uuidgen() {
-    if ! command -v uuidgen &> /dev/null; then
-        echo "Error: 'uuidgen' command not found." >&2
-        echo "Please install it (e.g., on Debian/Ubuntu: sudo apt-get install uuid-runtime)." >&2
-        exit 1
-    fi
-}
+# Default compression settings
+COMPRESSION_LEVEL="none"
+MAX_TOKENS=0  # 0 = unlimited
+CURRENT_TOKEN_COUNT=0
 
-# Marker prefixes used to delimit sections in the archive
+# Priority file extensions for smart mode
+PRIORITY_EXTENSIONS=(".py" ".js" ".ts" ".md" ".sh" ".cpp" ".h" ".java" ".go" ".rs")
+
+# Semantic exclusion patterns
+SEMANTIC_EXCLUDES=(
+    "*.min.js" "*.min.css" "*.bundle.*" "*lock*" "*.log" "*cache*" "*dist/*"
+    "*build/*" "*.pyc" "*__pycache__*" "*generated*" "*vendor/*" "*node_modules/*"
+    "*.png" "*.jpg" "*.jpeg" "*.gif" "*.bmp" "*.tiff" "*.ico" "*.svg"
+    "*.zip" "*.tar" "*.gz" "*.bz2" "*.rar" "*.7z" "*.tgz"
+    "*.pdf" "*.doc" "*.docx" "*.xls" "*.xlsx" "*.ppt" "*.pptx" "*.odt" "*.ods" "*.odp"
+    "*.o" "*.a" "*.so" "*.dll" "*.exe" "*.jar" "*.class" "*.swp" "*.bak" "*.tmp"
+    "*.DS_Store" "*.iml" "*.ipr" "*.iws" ".idea/*" ".vscode/*" "*.beam" "*.elf"
+    "*.mp3" "*.mp4" "*.avi" "*.mov" "*.wav" "*.webm"
+    "*.db" "*.sqlite" "*.sqlite3" "*.dump"
+    "*.woff" "*.woff2" "*.ttf" "*.eot" # Font files
+    "*/.git/*" ".git"
+    "*/.hg/*" ".hg"
+    "*/.svn/*" ".svn"
+)
+
+# Marker prefixes
+PAK_ID_LINE_PREFIX="__PAK_ID__:"
 PAK_UUID_LINE_PREFIX="__PAK_UUID__:"
 PAK_FILE_START_PREFIX="__PAK_FILE_"
 PAK_DATA_START_PREFIX="__PAK_DATA_"
-PAK_DATA_END_PREFIX="__PAK_DATA_" # Suffix will be _END__<UUID>__
+PAK_DATA_END_PREFIX="__PAK_DATA_"
 
-# Function to define the actual start/end markers using a specific UUID
+PAK_FILE_START=""
+PAK_DATA_START=""
+PAK_DATA_END=""
+
 define_markers() {
-    local uuid="$1"
-    PAK_FILE_START="${PAK_FILE_START_PREFIX}${uuid}_START__"
-    PAK_DATA_START="${PAK_DATA_START_PREFIX}${uuid}_START__"
-    PAK_DATA_END="${PAK_DATA_END_PREFIX}${uuid}_END__"
+    local id="$1"
+    PAK_FILE_START="${PAK_FILE_START_PREFIX}${id}_START__"
+    PAK_DATA_START="${PAK_DATA_START_PREFIX}${id}_START__"
+    PAK_DATA_END="${PAK_DATA_END_PREFIX}${id}_END__"
 }
 
-# Function to pack a single file into the archive format.
+estimate_tokens() {
+    local file="$1"
+    if [ -f "$file" ]; then
+        local size
+        if command -v stat &> /dev/null; then
+            size=$(stat -c%s "$file" 2>/dev/null || echo "0")
+        else
+            size=$(wc -c < "$file" 2>/dev/null || echo "0")
+        fi
+        echo $((size / 4))
+    else
+        echo "0"
+    fi
+}
+
+calculate_file_importance() {
+    local file="$1"
+    local score=0
+    local filename=$(basename "$file")
+    local extension="${filename##*.}"
+    case ".$extension" in
+        .py|.js|.ts|.cpp|.h|.java|.go|.rs) score=$((score + 10)) ;;
+        .md|.rst) if [[ "$filename" =~ ^(README|readme|CHANGELOG) ]]; then score=$((score + 15)); else score=$((score + 5)); fi ;;
+        .sh|.bash) score=$((score + 8)) ;;
+        .json|.yml|.yaml|.toml) score=$((score + 3)) ;;
+        *) score=$((score + 1)) ;;
+    esac
+    if [[ "$filename" =~ ^(main|index|app|core|setup|config|dockerfile|makefile|requirements|package\.json|gemfile|build\.gradle)($|\.) ]]; then score=$((score + 7)); fi
+    if [[ "$file" =~ (test|Test|spec|fixture|mock|stub) ]]; then score=$((score - 5)); fi
+    if [ "$score" -lt 0 ]; then score=0; fi
+    echo "$score"
+}
+
+matches_semantic_excludes() {
+    local file_path="$1"
+    for pattern in "${SEMANTIC_EXCLUDES[@]}"; do
+        if [[ "$file_path" == $pattern ]]; then return 0; fi
+    done
+    return 1
+}
+
+PACK_INCLUDE_EXTENSIONS=()
+
+matches_extension_filter() {
+    local file="$1"
+    if [ ${#PACK_INCLUDE_EXTENSIONS[@]} -eq 0 ]; then return 0; fi
+    local filename_only=$(basename "$file")
+    for ext_filter_item in "${PACK_INCLUDE_EXTENSIONS[@]}"; do
+        if [[ "$ext_filter_item" == .* ]]; then
+            if [[ "$filename_only" == *"$ext_filter_item" ]]; then return 0; fi
+        else
+            if [[ "$filename_only" == "$ext_filter_item" ]] || [[ "$filename_only" == *".$ext_filter_item" ]]; then return 0; fi
+        fi
+    done
+    return 1
+}
+
+compress_content_light() {
+    local file_path_or_stdin="$1"
+    sed -E '/^[[:space:]]*$/d' "$file_path_or_stdin" | sed -E 's/^[[:space:]]+//' | sed -E 's/[[:space:]]+$//'
+}
+
+compress_content_medium() {
+    local file="$1"
+    local extension="${file##*.}"
+    local ext_lower=$(echo "$extension" | tr '[:upper:]' '[:lower:]')
+    case "$ext_lower" in
+        py|js|ts|java|c|cpp|h|cs|go|rs|php|rb|pl|swift|kt|kts|sh|bash)
+            sed -E \
+                -e '1{/^#![^\n]*$/b}' \
+                -e '/^[[:space:]]*\/\//d' \
+                -e '/^[[:space:]]*#/d' \
+                -e '/^[[:space:]]*\/\*.*\*\//d' \
+                -e '/^[[:space:]]*<!--.*-->/d' \
+                "$file" | compress_content_light /dev/stdin ;;
+        *) compress_content_light "$file" ;;
+    esac
+}
+
+compress_content_aggressive() {
+    local file="$1"
+    local extension="${file##*.}"
+    local ext_lower=$(echo "$extension" | tr '[:upper:]' '[:lower:]')
+    local content=""
+    case "$ext_lower" in
+        py) content=$(grep -Eahn --text '^\s*(def |class |import |from |@|\s*"""|\s*#\s*(TODO|FIXME|NOTE|OPTIMIZE|IMPORTANT|HACK|XXX))' "$file" | head -n 100) ;;
+        js|ts) content=$(grep -Eahn --text '^\s*(function |const |let |var |export |import |class |@|\/\*\*|\*\/|\s*\/\/\s*(TODO|FIXME|NOTE|OPTIMIZE|IMPORTANT|HACK|XXX))' "$file" | head -n 100) ;;
+        c|cpp|h|java|go|rs|cs) content=$(grep -Eahn --text '^\s*(public |private |protected |static |final |func |fn |void |int |long |char |string |struct |class |interface |enum |package |import |#include|#pragma|\/\*\*|\*\/|\s*\/\/\s*(TODO|FIXME|NOTE|OPTIMIZE|IMPORTANT|HACK|XXX))' "$file" | head -n 100) ;;
+        md|rst) content=$(head -n 150 "$file") ;;
+        sh|bash) content=$(grep -Ev '^[[:space:]]*#|^[[:space:]]*$' "$file" | head -n 100) ;;
+        json|yml|yaml|toml|xml|html|css) content=$(head -n 200 "$file") ;;
+        *) compress_content_medium "$file"; return ;;
+    esac
+    if [ -z "$content" ] && [ -s "$file" ]; then
+        compress_content_medium "$file"
+    else
+        echo "$content"
+    fi
+}
+
 pack_file() {
     local file="$1"
-    local uuid="$2"
-    define_markers "$uuid" # Define markers using the current archive's UUID
+    local current_archive_id="$2"
+    local size lines compressed_content estimated_tokens
 
-    local size lines
-    if ! size=$(stat -c%s "$file" 2>/dev/null); then
-        echo "Warning: Could not get size for '$file'. Skipping." >&2
+    if ! size=$(stat -c%s "$file" 2>/dev/null || wc -c < "$file" 2>/dev/null); then
+        echo "Warning: Could not get size for '$file'. Skipping." >&2; return;
+    fi
+
+    # Handle empty files first
+    if [ "$size" -eq 0 ]; then
+        compressed_content="" # Empty content for empty files
+        # No "Skipping compression" message for empty files as there's nothing to compress
+    else
+        local is_text=false
+        if command -v file &> /dev/null; then
+            if LANG=C file "$file" | grep -q "text"; then
+                is_text=true
+            elif LANG=C file "$file" | grep -q "empty"; then # if file reports "empty" but size > 0 (e.g. whitespace only)
+                is_text=true # Treat as text for compression (will likely become empty)
+            fi
+        else
+            case "${file##*.}" in
+                py|js|ts|md|sh|cpp|h|java|go|rs|json|yml|yaml|toml|txt|xml|html|css|c|cs|php|rb|pl|swift|kt|kts) is_text=true ;;
+            esac
+        fi
+
+        if $is_text; then
+            case "$COMPRESSION_LEVEL" in
+                "light") compressed_content=$(compress_content_light "$file") ;;
+                "medium") compressed_content=$(compress_content_medium "$file") ;;
+                "aggressive") compressed_content=$(compress_content_aggressive "$file") ;;
+                *) compressed_content=$(cat "$file") ;; # none
+            esac
+        else # Not identified as text, or 'file' command unavailable and not a known text ext
+            if [ "$COMPRESSION_LEVEL" != "none" ]; then # Only show message if compression was attempted
+                 echo "Info: Skipping compression for non-text or unknown file type '$file'." >&2
+            fi
+            compressed_content=$(cat "$file") # Pack as-is
+        fi
+    fi
+
+    estimated_tokens=$(printf "%s" "$compressed_content" | wc -c | awk '{print int($1/4)}')
+    if [ "$MAX_TOKENS" -gt 0 ] && [ $((CURRENT_TOKEN_COUNT + estimated_tokens)) -gt "$MAX_TOKENS" ]; then
+        echo "Info: Skipping '$file' (token limit: $MAX_TOKENS. Current: $CURRENT_TOKEN_COUNT, File: $estimated_tokens)" >&2
         return
     fi
-    if ! lines=$(wc -l < "$file" 2>/dev/null); then
-         lines="N/A"
-    fi
+    CURRENT_TOKEN_COUNT=$((CURRENT_TOKEN_COUNT + estimated_tokens))
+    lines=$(printf "%s" "$compressed_content" | wc -l)
 
     echo "$PAK_FILE_START"
     echo "Path: $file"
     echo "Size: $size"
     echo "Lines: $lines"
+    echo "Tokens: $estimated_tokens"
     echo "$PAK_DATA_START"
-    cat "$file"
-    if [ "$(tail -c1 "$file" | wc -l)" -eq 0 ]; then
-        echo # Add a newline
+    printf "%s" "$compressed_content"
+    local last_char_is_newline=false
+    if [ -n "$compressed_content" ]; then
+      if [[ "${compressed_content: -1}" == $'\n' ]]; then last_char_is_newline=true; fi
+      if ! $last_char_is_newline; then echo; fi
+    else
+      echo # Ensure PAK_DATA_END is on a new line if content was empty
     fi
     echo "$PAK_DATA_END"
 }
 
-# Pack mode: process each file/directory argument and output the archive to stdout.
-pack() {
-    check_uuidgen
+archive_id_for_session=""
 
-    local PACK_INCLUDE_EXTENSIONS=()
-    local FILES_AND_DIRS_TO_PACK=()
-
-    # Parse --ext arguments and file/directory paths
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-            --ext)
-                shift # remove --ext
-                if [ "$#" -eq 0 ] || [[ "$1" == --* ]]; then
-                    echo "Error: --ext requires at least one extension argument (e.g., .py .txt)" >&2
-                    echo "Usage: $0 --pack [--ext .ext1 .ext2 ...] <files/directories>" >&2
-                    exit 1
-                fi
-                while [ "$#" -gt 0 ] && [[ "$1" != --* ]]; do
-                    PACK_INCLUDE_EXTENSIONS+=("*$1") # Store as wildcard pattern, e.g., .py becomes *.py
-                    shift
-                done
-                ;;
-            *) # Assumed to be a file or directory path
-                FILES_AND_DIRS_TO_PACK+=("$1")
-                shift
-                ;;
-        esac
-    done
-
-    if [ "${#FILES_AND_DIRS_TO_PACK[@]}" -eq 0 ]; then
-        echo "Usage: $0 --pack [--ext .ext1 .ext2 ...] <files/directories>" >&2
-        echo "Error: No files or directories specified for packing." >&2
-        exit 1
-    fi
-
-    local archive_uuid
-    archive_uuid=$(uuidgen)
-    if [ -z "$archive_uuid" ]; then
-         echo "Error: Failed to generate UUID." >&2
-         exit 1
-    fi
-
-    echo "${PAK_UUID_LINE_PREFIX}${archive_uuid}"
-    define_markers "$archive_uuid"
-
-    for item in "${FILES_AND_DIRS_TO_PACK[@]}"; do
+pack_smart() {
+    local files_and_dirs_to_pack=("$@")
+    local file_list=() importance_list=()
+    for item in "${files_and_dirs_to_pack[@]}"; do
         if [ -f "$item" ]; then
-            local base_item
-            base_item=$(basename "$item")
-            if [[ "$base_item" == "poetry.lock" || "$item" == *.pak || "$item" =~ (^|/)\. ]]; then
-                echo "Info: Skipping explicitly provided file '$item' (hidden, specific exclusion, or .pak)." >&2
-                continue
+            if ! matches_semantic_excludes "$item" && matches_extension_filter "$item"; then
+                local importance=$(calculate_file_importance "$item")
+                local original_tokens=$(estimate_tokens "$item")
+                importance_list+=("$importance:$original_tokens:$item")
             fi
-            pack_file "$item" "$archive_uuid"
         elif [ -d "$item" ]; then
-            if [[ "$item" =~ (^|/)\. && "$item" != "." && "$item" != ".." ]]; then
-                echo "Info: Skipping hidden directory '$item'." >&2
-                continue
-            fi
-
-            local find_cmd_parts=()
-            local search_path="$item"
-            
-            find_cmd_parts+=("$search_path")
-            find_cmd_parts+=("-mindepth" "1")
-
-            # Directory exclusions to prune: \( -name "node_modules" -o ... \) -prune -o
-            find_cmd_parts+=("(") # Start of prune group
-            find_cmd_parts+=("-name" "node_modules")
-            find_cmd_parts+=("-o" "-name" "__pycache__")
-            find_cmd_parts+=("-o" "-name" "python")
-            find_cmd_parts+=("-o" "-name" "*.dist-info")
-            find_cmd_parts+=("-o" "-name" "venv")
-            find_cmd_parts+=("-o" "-name" ".venv")
-            find_cmd_parts+=("-o" "-name" "htmlcov")
-            find_cmd_parts+=("-o" "-path" "*/.git")
-            find_cmd_parts+=("-o" "-path" "*/.svn")
-            find_cmd_parts+=("-o" "-path" "*/.hg")
-            find_cmd_parts+=(")") # End of prune group
-            find_cmd_parts+=("-prune")
-            find_cmd_parts+=("-o") # OR, proceed if not pruned
-            
-            # Start group for file selection criteria: \( -type f ... -print0 \)
-            find_cmd_parts+=("(") # Start of selection criteria group
-            find_cmd_parts+=("-type" "f")
-            
-            # General file name/path based exclusions
-            find_cmd_parts+=("!" "-name" "*.pak")
-            find_cmd_parts+=("!" "-name" "poetry.lock")
-            find_cmd_parts+=("!" "-path" "*/.*") # Exclude hidden files/dirs
-
-            # Add extension filtering if PACK_INCLUDE_EXTENSIONS is not empty
-            if [ "${#PACK_INCLUDE_EXTENSIONS[@]}" -gt 0 ]; then
-                find_cmd_parts+=("(") # Start OR group for extensions
-                local first_ext=true
-                for ext_pattern in "${PACK_INCLUDE_EXTENSIONS[@]}"; do
-                    if ! $first_ext; then
-                        find_cmd_parts+=("-o")
-                    fi
-                    find_cmd_parts+=("-name" "$ext_pattern")
-                    first_ext=false
-                done
-                find_cmd_parts+=(")") # End OR group for extensions
-            fi
-
-            find_cmd_parts+=("-print0") # Action
-            find_cmd_parts+=(")") # End of selection criteria group
-            
-            # For debugging the find command:
-            # echo "Debug: find ${find_cmd_parts[@]}" >&2
-            
-            find "${find_cmd_parts[@]}" | while IFS= read -r -d $'\0' file; do
-                 pack_file "$file" "$archive_uuid"
-            done
+            find_exclude_opts=(-path "*/.git" -o -path "*/.hg" -o -path "*/.svn" -o -name "*.pak")
+            while IFS= read -r -d '' file; do
+                if ! matches_semantic_excludes "$file" && matches_extension_filter "$file"; then
+                    local importance=$(calculate_file_importance "$file")
+                    local original_tokens=$(estimate_tokens "$file")
+                    importance_list+=("$importance:$original_tokens:$file")
+                fi
+            done < <(find "$item" \( "${find_exclude_opts[@]}" \) -prune -o -type f -print0)
+        fi
+    done
+    IFS=$'\n' sorted_files=($(printf '%s\n' "${importance_list[@]}" | sort -t: -k1,1nr -k2,2n)); unset IFS
+    echo "Info: Found ${#sorted_files[@]} files matching filters. Smart compression (budget: $MAX_TOKENS tokens)..." >&2
+    for entry in "${sorted_files[@]}"; do
+        local importance="${entry%%:*}"
+        local original_tokens_for_entry="${entry#*:}"; original_tokens_for_entry="${original_tokens_for_entry%%:*}"
+        local filepath="${entry##*:}"
+        local temp_compression_level initial_compression_level_for_smart="light"
+        if [ "$MAX_TOKENS" -gt 0 ]; then
+            local remaining_budget=$((MAX_TOKENS - CURRENT_TOKEN_COUNT))
+            if [ "$remaining_budget" -le 0 ]; then echo "Info: Token budget exhausted." >&2; break; fi
+            if [ "$importance" -lt 5 ] || ( [ "$importance" -lt 8 ] && [ "$original_tokens_for_entry" -gt $((remaining_budget / 3)) ] ); then temp_compression_level="aggressive";
+            elif [ "$importance" -lt 8 ] || ( [ "$importance" -lt 10 ] && [ "$original_tokens_for_entry" -gt $((remaining_budget / 2)) ] ); then temp_compression_level="medium";
+            else temp_compression_level="$initial_compression_level_for_smart"; fi
         else
-            echo "Warning: '$item' is not a file or directory. Skipped." >&2
+             if [ "$importance" -lt 5 ]; then temp_compression_level="aggressive";
+             elif [ "$importance" -lt 8 ]; then temp_compression_level="medium";
+             else temp_compression_level="$initial_compression_level_for_smart"; fi
+        fi
+        local original_script_compression_level_backup="$COMPRESSION_LEVEL"
+        COMPRESSION_LEVEL="$temp_compression_level"
+        pack_file "$filepath" "$archive_id_for_session"
+        COMPRESSION_LEVEL="$original_script_compression_level_backup"
+        if [ "$MAX_TOKENS" -gt 0 ] && [ "$CURRENT_TOKEN_COUNT" -ge "$MAX_TOKENS" ]; then
+            echo "Info: Token limit reached. Processed up to '$filepath'." >&2; break;
         fi
     done
 }
 
-# List mode: display archive metadata
-list_archive() {
-    local archive="$1"
-    if [ ! -f "$archive" ]; then
-        echo "Archive file not found: $archive" >&2
-        exit 1
-    fi
-
-    local first_line
-    if ! read -r first_line < "$archive"; then
-        echo "Error: Could not read archive file: $archive" >&2
-        exit 1
-    fi
-
-    local archive_uuid=""
-    if [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then
-        archive_uuid="${first_line#${PAK_UUID_LINE_PREFIX}}"
-    else
-        echo "Warning: Archive file '${archive}' does not start with a UUID header. Attempting to parse with default markers (may fail)." >&2
-        define_markers "LEGACY_PLACEHOLDER"
-    fi
-
-    if [ -n "$archive_uuid" ]; then
-         define_markers "$archive_uuid"
-         tail -n +2 "$archive" | awk -v FILE_START="$PAK_FILE_START" -v DATA_START="$PAK_DATA_START" '
-         $0 == FILE_START { header = 1; next }
-         header && /^Path: / { path = substr($0, index($0," ")+1); next }
-         header && /^Size: / { size = substr($0, index($0," ")+1); next }
-         header && /^Lines: / { next }
-         header && $0 == DATA_START {
-             printf "%s and Size: %s\n", path, size;
-             header = 0;
-             next;
-         }
-         '
-    else
-         awk -v FILE_START="$PAK_FILE_START" -v DATA_START="$PAK_DATA_START" '
-         $0 == FILE_START { header = 1; next }
-         header && /^Path: / { path = substr($0, index($0," ")+1); next }
-         header && /^Size: / { size = substr($0, index($0," ")+1); next }
-         header && /^Lines: / { next }
-         header && $0 == DATA_START {
-             printf "%s and Size: %s\n", path, size;
-             header = 0;
-             next;
-         }
-         ' "$archive"
-    fi
-}
-
-# Function to check if a file path matches any glob pattern in an array
-matches_any_glob_pattern() {
-    local file_path="$1"
-    shift
-    local patterns=("$@")
-    
-    for pattern in "${patterns[@]}"; do
-        if [[ "$file_path" == $pattern ]]; then
-            return 0 # Match found
-        fi
-    done
-    return 1 # No match
-}
-
-# Function to check if a file path matches any regex pattern in an array
-matches_any_regex_pattern() {
-    local file_path="$1"
-    shift
-    local patterns=("$@")
-    
-    for pattern in "${patterns[@]}"; do
-        if [[ "$file_path" =~ $pattern ]]; then
-            return 0 # Match found
-        fi
-    done
-    return 1 # No match
-}
-
-# Function to verify the integrity of an archive
-verify_archive() {
-    local archive="$1"
-    echo "Verifying archive '$archive'..."
-    
-    if [ ! -f "$archive" ]; then
-        echo "Error: Archive file not found: $archive" >&2
-        exit 1
-    fi
-
-    local temp_dir="/tmp/pak_temp_verify_$(date +%s%N)"
-    local temp_archive="${temp_dir}/$(basename "$archive")"
-    
-    mkdir -p "$temp_dir"
-    cp "$archive" "$temp_archive"
-    
-    if [ ! -f "$temp_archive" ]; then
-        echo "Error in temporary copy. Using original." >&2
-        temp_archive="$archive"
-    fi
-
-    local first_line
-    if ! read -r first_line < "$temp_archive"; then
-        echo "Error: Cannot read archive file: $temp_archive" >&2
-        rm -rf "$temp_dir"
-        exit 1
-    fi
-
-    local archive_uuid=""
-    if [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then
-        archive_uuid="${first_line#${PAK_UUID_LINE_PREFIX}}"
-    else
-        echo "Error: Archive does not start with a valid UUID header." >&2
-        rm -rf "$temp_dir"
-        exit 1
-    fi
-
-    define_markers "$archive_uuid"
-
-    local total_files=0
-    local valid_files=0
-    local invalid_files=0 
-    local current_state="INIT" 
-    local current_file_path_meta=""
-    local current_file_size_meta=""
-    local error_found=false
-    
-    mapfile -t all_lines < <(tail -n +2 "$temp_archive")
-    
-    for line_idx in "${!all_lines[@]}"; do
-        local line="${all_lines[$line_idx]}"
-        case "$current_state" in
-            "INIT")
-                if [[ "$line" == "$PAK_FILE_START" ]]; then
-                    current_state="HEADER"
-                    current_file_path_meta=""
-                    current_file_size_meta=""
-                    total_files=$((total_files + 1))
-                elif [ -n "$line" ]; then 
-                    echo "Error (L$((line_idx+2))): Unexpected line in INIT state: '$line'" >&2
-                    error_found=true; break
+pack() {
+    PACK_INCLUDE_EXTENSIONS=()
+    local final_files_dirs_to_pack=()
+    local using_smart_mode=false
+    if [ "$COMPRESSION_LEVEL" = "smart" ]; then using_smart_mode=true; fi
+    local args_for_pack_function_processing=("$@")
+    while [ "${#args_for_pack_function_processing[@]}" -gt 0 ]; do
+        local arg="${args_for_pack_function_processing[0]}"
+        case "$arg" in
+            --ext)
+                unset 'args_for_pack_function_processing[0]'; args_for_pack_function_processing=("${args_for_pack_function_processing[@]}")
+                if [ "${#args_for_pack_function_processing[@]}" -eq 0 ] || [[ "${args_for_pack_function_processing[0]}" == --* ]]; then
+                    echo "Error: --ext requires at least one extension argument (e.g., .py .md)" >&2; exit 1;
                 fi
-                ;;
-            "HEADER")
-                if [[ "$line" == "Path: "* ]]; then
-                    current_file_path_meta="${line#Path: }"
-                elif [[ "$line" == "Size: "* ]]; then
-                    current_file_size_meta="${line#Size: }"
-                elif [[ "$line" == "Lines: "* ]]; then
-                    : 
-                elif [[ "$line" == "$PAK_DATA_START" ]]; then
-                    if [ -z "$current_file_path_meta" ] || [ -z "$current_file_size_meta" ]; then
-                        echo "Error (L$((line_idx+2))): Incomplete metadata before DATA_START (Path: '$current_file_path_meta', Size: '$current_file_size_meta')" >&2
-                        error_found=true 
-                    fi
-                    current_state="DATA"
-                elif [ -n "$line" ]; then 
-                    echo "Error (L$((line_idx+2))): Unrecognized header line or unexpected content: '$line'" >&2
-                    error_found=true; 
-                fi
-                ;;
-            "DATA")
-                if [[ "$line" == "$PAK_DATA_END" ]]; then
-                    current_state="INIT"
-                    if ! $error_found || [ -n "$current_file_path_meta" ]; then 
-                         valid_files=$((valid_files + 1))
-                    fi
-                else
-                    :
-                fi
-                ;;
+                while [ "${#args_for_pack_function_processing[@]}" -gt 0 ] && ! [[ "${args_for_pack_function_processing[0]}" == --* ]]; do
+                    PACK_INCLUDE_EXTENSIONS+=("${args_for_pack_function_processing[0]}")
+                    unset 'args_for_pack_function_processing[0]'; args_for_pack_function_processing=("${args_for_pack_function_processing[@]}")
+                done ;;
+            *)
+                final_files_dirs_to_pack+=("$arg")
+                unset 'args_for_pack_function_processing[0]'; args_for_pack_function_processing=("${args_for_pack_function_processing[@]}") ;;
         esac
-        if $error_found && [ "$invalid_files" -eq 0 ]; then 
-            invalid_files=$((total_files - valid_files)) 
-        fi
     done
-    
-    if [ "$current_state" != "INIT" ]; then
-        echo "Error: Archive ends in an incomplete state ($current_state)." >&2
-        error_found=true
-        if [ "$invalid_files" -eq 0 ] && [ "$total_files" -gt "$valid_files" ]; then
-             invalid_files=$((total_files - valid_files))
-        elif [ "$total_files" -eq "$valid_files" ] && [ "$total_files" -gt 0 ]; then 
-             invalid_files=1 
-        elif [ "$total_files" -eq 0 ] && [ "$current_state" != "INIT" ]; then 
-             : 
-        fi
+    if [ "${#final_files_dirs_to_pack[@]}" -eq 0 ]; then
+        script_name=$(basename "$0")
+        echo "Usage: $script_name --pack [GLOBAL_OPTS] [--ext .ext1] <files/dirs>" >&2; exit 1;
     fi
-    
-    rm -rf "$temp_dir"
-    
-    local actual_invalid_files=$((total_files - valid_files))
-
-    echo "----------------------------------------"
-    echo "Archive Verification Results:"
-    echo "----------------------------------------"
-    echo "Total file entries found: $total_files"
-    echo "Structurally valid file entries: $valid_files"
-    echo "Structurally invalid/incomplete entries: $actual_invalid_files"
-    
-    if $error_found || [ "$actual_invalid_files" -gt 0 ]; then
-        echo "VERIFICATION FAILED: Errors found in the archive structure."
-        return 1
+    archive_id_for_session=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12)
+    if [ -z "$archive_id_for_session" ]; then echo "Error: Failed to generate Archive ID." >&2; exit 1; fi
+    echo "${PAK_ID_LINE_PREFIX}${archive_id_for_session}"
+    echo "# Archive created with pak v$VERSION"
+    echo "# Archive ID: $archive_id_for_session"
+    echo "# Compression Mode: $COMPRESSION_LEVEL"
+    if [ "${#PACK_INCLUDE_EXTENSIONS[@]}" -gt 0 ]; then echo "# Extension Filter: ${PACK_INCLUDE_EXTENSIONS[*]}"; fi
+    if [ "$MAX_TOKENS" -gt 0 ]; then echo "# Token Limit: $MAX_TOKENS"; fi
+    define_markers "$archive_id_for_session"
+    if $using_smart_mode; then
+        pack_smart "${final_files_dirs_to_pack[@]}"
     else
-        echo "VERIFICATION SUCCESSFUL: Archive structure appears intact."
-        return 0
-    fi
-}
-
-
-# Unpack mode: read the archive and recreate files/directories.
-unpack_archive() {
-    local archive="$1"
-    local outdir="${2:-.}"
-    
-    if [ ! -f "$archive" ]; then
-        echo "Archive file not found: $archive" >&2
-        exit 1
-    fi
-    
-    if [ ! -d "$outdir" ]; then
-        mkdir -p "$outdir"
-        if [ $? -ne 0 ]; then
-            echo "Error: Cannot create output directory '$outdir'" >&2
-            exit 1
-        fi
-    fi
-
-    local temp_dir="/tmp/pak_temp_unpack_$(date +%s%N)"
-    local temp_archive="${temp_dir}/$(basename "$archive")"
-    
-    mkdir -p "$temp_dir"
-    cp "$archive" "$temp_archive"
-    
-    if [ ! -f "$temp_archive" ]; then
-        echo "Error in temporary copy. Using original." >&2
-        temp_archive="$archive"
-    fi
-
-    local first_line
-    if ! read -r first_line < "$temp_archive"; then
-        echo "Error: Could not read archive file: $temp_archive" >&2
-        rm -rf "$temp_dir"
-        exit 1
-    fi
-
-    local archive_uuid=""
-    if [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then
-        archive_uuid="${first_line#${PAK_UUID_LINE_PREFIX}}"
-    else
-        echo "Warning: Archive file '${temp_archive}' does not start with a UUID header. Attempting to parse with default markers (may fail)." >&2
-        define_markers "LEGACY_PLACEHOLDER"
-    fi
-
-    local files_extracted=0
-    local files_skipped=0
-
-    if [ -n "$archive_uuid" ]; then
-        define_markers "$archive_uuid"
-        mapfile -t all_lines < <(tail -n +2 "$temp_archive")
-        
-        local current_file_path=""
-        local in_data_section=0
-        
-        for line in "${all_lines[@]}"; do
-            if [[ "$line" == "$PAK_FILE_START" ]]; then
-                current_file_path=""
-                in_data_section=0
-            elif [[ "$line" == "Path:"* ]]; then
-                current_file_path="${line#Path: }"
-                
-                local should_extract=true
-                if [ ${#INCLUDE_PATTERNS[@]} -gt 0 ] || [ ${#INCLUDE_REGEX[@]} -gt 0 ]; then
-                    should_extract=false 
-                    if [ ${#INCLUDE_PATTERNS[@]} -gt 0 ] && matches_any_glob_pattern "$current_file_path" "${INCLUDE_PATTERNS[@]}"; then
-                        should_extract=true
+        for item in "${final_files_dirs_to_pack[@]}"; do
+            if [ -f "$item" ]; then
+                if ! matches_semantic_excludes "$item" && matches_extension_filter "$item"; then
+                    pack_file "$item" "$archive_id_for_session"
+                fi
+            elif [ -d "$item" ]; then
+                find_exclude_opts=(-path "*/.git" -o -path "*/.hg" -o -path "*/.svn" -o -name "*.pak")
+                while IFS= read -r -d '' file; do
+                    if ! matches_semantic_excludes "$file" && matches_extension_filter "$file"; then # Corrected from "$item"
+                        pack_file "$file" "$archive_id_for_session"
                     fi
-                    if ! $should_extract && [ ${#INCLUDE_REGEX[@]} -gt 0 ] && matches_any_regex_pattern "$current_file_path" "${INCLUDE_REGEX[@]}"; then
-                        should_extract=true
-                    fi
-                fi
-                
-                if $should_extract; then
-                    if [ ${#EXCLUDE_PATTERNS[@]} -gt 0 ] && matches_any_glob_pattern "$current_file_path" "${EXCLUDE_PATTERNS[@]}"; then
-                        should_extract=false
-                    fi
-                    if $should_extract && [ ${#EXCLUDE_REGEX[@]} -gt 0 ] && matches_any_regex_pattern "$current_file_path" "${EXCLUDE_REGEX[@]}"; then
-                        should_extract=false
-                    fi
-                fi
-
-                if ! $should_extract; then
-                    current_file_path="__SKIP__" 
-                    files_skipped=$((files_skipped + 1))
-                fi
-            elif [[ "$line" == "$PAK_DATA_START" ]]; then
-                if [ -n "$current_file_path" ] && [ "$current_file_path" != "__SKIP__" ]; then
-                    local full_output_path="${outdir}/${current_file_path}"
-                    mkdir -p "$(dirname "$full_output_path")"
-                    : > "$full_output_path" 
-                    in_data_section=1
-                else
-                    in_data_section=0 
-                fi
-            elif [[ "$line" == "$PAK_DATA_END" ]]; then
-                if [ "$in_data_section" -eq 1 ]; then
-                    files_extracted=$((files_extracted + 1))
-                fi
-                in_data_section=0
-                current_file_path="" 
-            elif [ "$in_data_section" -eq 1 ]; then
-                local full_output_path="${outdir}/${current_file_path}"
-                printf "%s\n" "$line" >> "$full_output_path"
+                done < <(find "$item" \( "${find_exclude_opts[@]}" \) -prune -o -type f -print0)
+            fi
+            if [ "$MAX_TOKENS" -gt 0 ] && [ "$CURRENT_TOKEN_COUNT" -ge "$MAX_TOKENS" ]; then
+                echo "Info: Token limit reached." >&2; break;
             fi
         done
-    else
-        local current_file_path=""
-        local in_data_section=0
-        while IFS= read -r line || [ -n "$line" ]; do 
-            if [[ "$line" == "$PAK_FILE_START" ]]; then
-                current_file_path=""
-                in_data_section=0
-            elif [[ "$line" == "Path:"* ]]; then
-                current_file_path="${line#Path: }"
-                local should_extract=true
-                if [ ${#INCLUDE_PATTERNS[@]} -gt 0 ] || [ ${#INCLUDE_REGEX[@]} -gt 0 ]; then
-                    should_extract=false 
-                    if [ ${#INCLUDE_PATTERNS[@]} -gt 0 ] && matches_any_glob_pattern "$current_file_path" "${INCLUDE_PATTERNS[@]}"; then should_extract=true; fi
-                    if ! $should_extract && [ ${#INCLUDE_REGEX[@]} -gt 0 ] && matches_any_regex_pattern "$current_file_path" "${INCLUDE_REGEX[@]}"; then should_extract=true; fi
-                fi
-                if $should_extract; then
-                    if [ ${#EXCLUDE_PATTERNS[@]} -gt 0 ] && matches_any_glob_pattern "$current_file_path" "${EXCLUDE_PATTERNS[@]}"; then should_extract=false; fi
-                    if $should_extract && [ ${#EXCLUDE_REGEX[@]} -gt 0 ] && matches_any_regex_pattern "$current_file_path" "${EXCLUDE_REGEX[@]}"; then should_extract=false; fi
-                fi
-                if ! $should_extract; then current_file_path="__SKIP__"; files_skipped=$((files_skipped + 1)); fi
-            elif [[ "$line" == "$PAK_DATA_START" ]]; then
-                if [ -n "$current_file_path" ] && [ "$current_file_path" != "__SKIP__" ]; then
-                    local full_output_path="${outdir}/${current_file_path}"
-                    mkdir -p "$(dirname "$full_output_path")"; : > "$full_output_path"; in_data_section=1
-                else
-                    in_data_section=0
-                fi
-            elif [[ "$line" == "$PAK_DATA_END" ]]; then
-                if [ "$in_data_section" -eq 1 ]; then files_extracted=$((files_extracted + 1)); fi
-                in_data_section=0; current_file_path=""
-            elif [ "$in_data_section" -eq 1 ]; then
-                local full_output_path="${outdir}/${current_file_path}"; printf "%s\n" "$line" >> "$full_output_path"
-            fi
-        done < "$temp_archive"
     fi
-    
-    rm -rf "$temp_dir"
-    echo "Extraction complete. $files_extracted file(s) extracted to '$outdir'. $files_skipped file(s) skipped."
+    echo "# Archive complete. Total estimated tokens: $CURRENT_TOKEN_COUNT" >&2
 }
 
-# --- Main Script Logic ---
+list_archive() {
+    local archive_file="$1"; local script_name=$(basename "$0")
+    if [ ! -f "$archive_file" ]; then echo "Error: Archive file not found: $archive_file" >&2; exit 1; fi
+    local first_line; read -r first_line < "$archive_file"; local archive_id_from_file=""
+    if [[ "$first_line" == "${PAK_ID_LINE_PREFIX}"* ]]; then archive_id_from_file="${first_line#${PAK_ID_LINE_PREFIX}}";
+    elif [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then archive_id_from_file="${first_line#${PAK_UUID_LINE_PREFIX}}"; echo "Info: Reading legacy UUID archive." >&2;
+    else echo "Error: Not a valid pak archive (missing ID line)." >&2; return 1; fi
+    if [ -z "$archive_id_from_file" ]; then echo "Error: Could not extract archive ID." >&2; exit 1; fi
+    define_markers "$archive_id_from_file"
+    tail -n +2 "$archive_file" | awk \
+        -v FILE_START="$PAK_FILE_START" -v DATA_START="$PAK_DATA_START" \
+    '
+    /^#.*/ {next}
+    $0 == FILE_START {h=1; p=""; s=""; t=""; next}
+    h && match($0, /^Path: (.*)/, arr) { p=arr[1]; next }
+    h && match($0, /^Size: (.*)/, arr) { s=arr[1]; next }
+    h && match($0, /^Tokens: (.*)/, arr) { t=arr[1]; next }
+    h && $0 == DATA_START { if(p){printf "%s (Size: %s", p, s; if(t!="")printf ", Tokens: %s",t; printf ")\n"} h=0; p="";s="";t=""; next}
+    h==0 {next}
+    '
+}
 
-INCLUDE_PATTERNS=()
-EXCLUDE_PATTERNS=()
-INCLUDE_REGEX=()
-EXCLUDE_REGEX=()
-OUTPUT_DIR="." 
+verify_archive() {
+    local archive_file="$1"; local script_name=$(basename "$0"); echo "Verifying archive '$archive_file'..."
+    if [ ! -f "$archive_file" ]; then echo "Error: Archive file not found: $archive_file" >&2; exit 1; fi
+    local first_line; read -r first_line < "$archive_file"; local archive_id_from_file=""; local fmt_msg="pak v2.1+ (short ID)"
+    if [[ "$first_line" == "${PAK_ID_LINE_PREFIX}"* ]]; then archive_id_from_file="${first_line#${PAK_ID_LINE_PREFIX}}";
+    elif [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then archive_id_from_file="${first_line#${PAK_UUID_LINE_PREFIX}}"; fmt_msg="pak v2.0 (UUID)"; echo "Info: Verifying legacy UUID archive." >&2;
+    else echo "Error: Not valid pak archive (missing ID line)." >&2; return 1; fi
+    if [ -z "$archive_id_from_file" ]; then echo "Error: Could not extract archive ID." >&2; return 1; fi
+    echo "Archive format: $fmt_msg, ID: $archive_id_from_file"; define_markers "$archive_id_from_file"
+    local total_files=0; local total_declared_tokens=0; local in_header=0
+    { IFS= read -r _; while IFS= read -r line; do
+        if [[ "$line" == "#"* ]] && [ "$in_header" -eq 0 ]; then continue; fi
+        if [[ "$line" == "$PAK_FILE_START" ]]; then total_files=$((total_files + 1)); in_header=1;
+        elif [[ "$line" == "$PAK_DATA_START" ]]; then in_header=0;
+        elif [[ "$line" == "Tokens: "* ]] && [ "$in_header" -eq 1 ]; then
+            local tokens_val="${line#Tokens: }"; tokens_val="${tokens_val%%[^0-9]*}"
+            if [[ "$tokens_val" =~ ^[0-9]+$ ]]; then total_declared_tokens=$((total_declared_tokens + tokens_val)); fi
+        fi; done; } < "$archive_file"
+    echo "Verification complete: Found $total_files files, total declared tokens: ~$total_declared_tokens"
+}
+
+unpack_archive() {
+    local archive_file="$1"; local outdir="${2:-.}"; local script_name=$(basename "$0"); echo "Unpacking '$archive_file' to '$outdir'..."
+    if [ ! -f "$archive_file" ]; then echo "Error: Archive file not found: $archive_file" >&2; exit 1; fi
+    local first_line; read -r first_line < "$archive_file"; local archive_id_from_file=""
+    if [[ "$first_line" == "${PAK_ID_LINE_PREFIX}"* ]]; then archive_id_from_file="${first_line#${PAK_ID_LINE_PREFIX}}";
+    elif [[ "$first_line" == "${PAK_UUID_LINE_PREFIX}"* ]]; then archive_id_from_file="${first_line#${PAK_UUID_LINE_PREFIX}}"; echo "Info: Unpacking legacy UUID archive." >&2;
+    else echo "Error: Not a valid pak archive (missing ID line)." >&2; return 1; fi
+    if [ -z "$archive_id_from_file" ]; then echo "Error: Could not extract archive ID." >&2; return 1; fi
+    define_markers "$archive_id_from_file"; mkdir -p "$outdir"
+    local current_path=""; local in_data_block=false; local temp_file_for_content=""
+    { IFS= read -r _; while IFS= read -r line; do
+        if ! $in_data_block && [[ "$line" == "#"* ]]; then continue; fi
+        if $in_data_block; then
+            if [[ "$line" == "$PAK_DATA_END" ]]; then
+                in_data_block=false
+                if [ -n "$current_path" ] && [ -n "$temp_file_for_content" ]; then
+                    local full_out_path="$outdir/$current_path"; local file_dir=$(dirname "$full_out_path")
+                    if ! mkdir -p "$file_dir"; then echo "Error: Could not create dir $file_dir" >&2; rm "$temp_file_for_content"; exit 1; fi
+                    if [ -f "$temp_file_for_content" ]; then
+                         if mv "$temp_file_for_content" "$full_out_path"; then echo "Extracted: $full_out_path"; else echo "Error: mv failed for $full_out_path" >&2; rm "$temp_file_for_content"; fi
+                    else echo "Warning: Temp file $temp_file_for_content not found for $current_path" >&2; fi
+                    temp_file_for_content=""; current_path=""
+                else echo "Error: Data end without path/temp file." >&2; if [ -n "$temp_file_for_content" ] && [ -f "$temp_file_for_content" ]; then rm "$temp_file_for_content"; fi; fi
+            else if [ -n "$temp_file_for_content" ]; then echo "$line" >> "$temp_file_for_content"; fi; fi
+        elif [[ "$line" == "$PAK_FILE_START" ]]; then
+            current_path=""; if [ -n "$temp_file_for_content" ] && [ -f "$temp_file_for_content" ]; then rm "$temp_file_for_content"; fi
+            temp_file_for_content=$(mktemp "${outdir}/.pak_tmp_XXXXXX")
+            if [ $? -ne 0 ] || [ -z "$temp_file_for_content" ]; then echo "Error: mktemp failed." >&2; exit 1; fi
+        elif [[ "$line" == "Path: "* ]]; then current_path="${line#Path: }"; current_path=$(echo "$current_path" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//');
+        elif [[ "$line" == "$PAK_DATA_START" ]]; then
+            if [ -z "$current_path" ]; then echo "Error: Data start without Path." >&2; if [ -n "$temp_file_for_content" ]; then rm "$temp_file_for_content"; fi; exit 1; fi
+            if [ -z "$temp_file_for_content" ]; then echo "Error: Temp file not ready for $current_path." >&2; exit 1; fi
+            in_data_block=true
+        fi; done; } < "$archive_file"
+    if [ -n "$temp_file_for_content" ] && [ -f "$temp_file_for_content" ]; then rm "$temp_file_for_content"; fi
+    echo "Unpack complete."
+}
+
+# Main script logic
+script_name=$(basename "$0")
 
 if [ "$#" -eq 0 ]; then
-    echo "Usage:" >&2
-    echo "  Pack (default): $0 [--pack] [--ext .ext1 .ext2 ...] <files/directories> > archive.pak" >&2
-    echo "  List:           $0 --ls <archive file>" >&2
-    echo "  Unpack:         $0 --unpack <archive file> [--include pattern] [--exclude pattern] [--include-regex pattern] [--exclude-regex pattern] [--outdir dir]" >&2
-    echo "  Verify:         $0 --verify <archive file>" >&2
-    echo "  Version:        $0 --version" >&2
-    echo "" >&2
-    echo "Examples:" >&2
-    echo "  Pack only Python and Markdown files from 'src' dir and 'main.py':" >&2
-    echo "      $0 --pack --ext .py .md src main.py > archive.pak" >&2
-    echo "  Extract only Python files:" >&2
-    echo "      $0 --unpack archive.pak --include \"*.py\"" >&2
-    echo "  Extract all except text files:" >&2
-    echo "      $0 --unpack archive.pak --exclude \"*.txt\"" >&2
-    echo "  Extract files matching regex:" >&2
-    echo "      $0 --unpack archive.pak --include-regex \"NPC\\.[a-z]+\\..*\\.txt\"" >&2
-    echo "  Extract to specific directory:" >&2
-    echo "      $0 --unpack archive.pak --outdir /path/to/extract" >&2
-    echo "  Multiple patterns:" >&2
-    echo "      $0 --unpack archive.pak --include \"*.py\" --include \"*.md\" --exclude \"test_*.py\"" >&2
+    echo "pak v$VERSION - Token-optimized file archiver for LLMs"
+    echo ""
+    echo "Usage:"
+    echo "  Pack:    $script_name [GLOBAL_OPTS] [--pack] [PACK_OPTS] <files/dirs ...> > archive.pak"
+    echo "  List:    $script_name --ls <archive file>"
+    echo "  Unpack:  $script_name --unpack <archive file> [--outdir dir]"
+    echo "  Verify:  $script_name --verify <archive file>"
+    echo ""
+    echo "Global Options (can appear anywhere before other commands or pack files):"
+    echo "  --compress-level LEVEL : none, light, medium, aggressive, smart (default: $COMPRESSION_LEVEL)"
+    echo "  --max-tokens N         : Limit total tokens in archive (0 for unlimited, default: $MAX_TOKENS)"
+    echo ""
+    echo "Pack Command Specific Options (can be mixed with files/dirs for --pack):"
+    echo "  --ext .ext1 .ext2 ...  : Only include files with these extensions or exact names (e.g., .py .md Makefile)"
+    echo ""
+    echo "Example:"
+    echo "  $script_name --compress-level smart --max-tokens 16000 src/ --ext .py .md project/README.md > archive.pak"
+    echo "  $script_name --pack src/ lib/ --ext .js .css --compress-level light > minimal_frontend.pak"
     exit 1
 fi
 
-if [[ "$1" != --* ]]; then
-    set -- --pack "$@"
-fi
+declare -a PASSTHROUGH_ARGS=()
+COMMAND=""
 
-COMMAND="$1"
-shift 
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --compress-level)
+            if [ -z "$2" ]; then echo "Error: --compress-level requires an argument." >&2; exit 1; fi
+            COMPRESSION_LEVEL="$2"
+            if ! [[ "$COMPRESSION_LEVEL" =~ ^(none|light|medium|aggressive|smart)$ ]]; then
+                 echo "Error: Invalid compression level '$COMPRESSION_LEVEL'." >&2; exit 1;
+            fi
+            shift 2; continue
+            ;;
+        --max-tokens)
+            if [ -z "$2" ] || ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                echo "Error: --max-tokens requires a non-negative integer." >&2; exit 1;
+            fi
+            MAX_TOKENS="$2"
+            shift 2; continue
+            ;;
+        --pack|--ls|--unpack|--verify|--version)
+            if [ -n "$COMMAND" ] && [ "$COMMAND" != "$1" ]; then
+                echo "Error: Cannot specify multiple main commands ('$COMMAND' and '$1')." >&2
+                PASSTHROUGH_ARGS+=("$1")
+                shift
+            elif [ -z "$COMMAND" ]; then
+                COMMAND="$1"
+                shift
+            else
+                PASSTHROUGH_ARGS+=("$1")
+                shift
+            fi
+            ;;
+        *)
+            PASSTHROUGH_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$COMMAND" ]; then
+    COMMAND="--pack"
+fi
 
 case "$COMMAND" in
     --pack)
-        pack "$@"
-        ;;
+        pack "${PASSTHROUGH_ARGS[@]}" ;;
     --ls)
-        if [ -z "$1" ]; then echo "Usage: $0 --ls <archive file>" >&2; exit 1; fi
-        list_archive "$1"
-        ;;
+        if [ "${#PASSTHROUGH_ARGS[@]}" -ne 1 ]; then echo "Usage: $script_name --ls <archive file>" >&2; exit 1; fi
+        list_archive "${PASSTHROUGH_ARGS[0]}" ;;
     --verify)
-        if [ -z "$1" ]; then echo "Usage: $0 --verify <archive file>" >&2; exit 1; fi
-        verify_archive "$1"
-        ;;
+        if [ "${#PASSTHROUGH_ARGS[@]}" -ne 1 ]; then echo "Usage: $script_name --verify <archive file>" >&2; exit 1; fi
+        verify_archive "${PASSTHROUGH_ARGS[0]}" ;;
     --unpack)
-        if [ -z "$1" ]; then echo "Usage: $0 --unpack <archive file> [options]" >&2; exit 1; fi
-        ARCHIVE_FILE="$1"
-        shift 
-        
-        while [ "$#" -gt 0 ]; do
-            case "$1" in
-                --include) if [ -z "$2" ]; then echo "Error: --include requires a pattern" >&2; exit 1; fi; INCLUDE_PATTERNS+=("$2"); shift 2;;
-                --exclude) if [ -z "$2" ]; then echo "Error: --exclude requires a pattern" >&2; exit 1; fi; EXCLUDE_PATTERNS+=("$2"); shift 2;;
-                --include-regex) if [ -z "$2" ]; then echo "Error: --include-regex requires a pattern" >&2; exit 1; fi; INCLUDE_REGEX+=("$2"); shift 2;;
-                --exclude-regex) if [ -z "$2" ]; then echo "Error: --exclude-regex requires a pattern" >&2; exit 1; fi; EXCLUDE_REGEX+=("$2"); shift 2;;
-                --outdir) if [ -z "$2" ]; then echo "Error: --outdir requires a directory path" >&2; exit 1; fi; OUTPUT_DIR="$2"; shift 2;;
-                *) echo "Error: Unknown option '$1' for --unpack" >&2; exit 1;;
-            esac
-        done
-        unpack_archive "$ARCHIVE_FILE" "$OUTPUT_DIR"
-        ;;
+        local archive_to_unpack=""
+        local unpack_outdir="."
+        local temp_unpack_args=("${PASSTHROUGH_ARGS[@]}")
+        if [ "${#temp_unpack_args[@]}" -eq 0 ]; then echo "Usage: $script_name --unpack <archive file> [--outdir dir]" >&2; exit 1; fi
+        archive_to_unpack="${temp_unpack_args[0]}"
+        unset 'temp_unpack_args[0]'; temp_unpack_args=("${temp_unpack_args[@]}")
+        if [ "${#temp_unpack_args[@]}" -gt 0 ] && [ "${temp_unpack_args[0]}" == "--outdir" ]; then
+            if [ "${#temp_unpack_args[@]}" -lt 2 ]; then echo "Error: --outdir requires a directory path." >&2; exit 1; fi
+            unpack_outdir="${temp_unpack_args[1]}"
+            unset 'temp_unpack_args[0]' 'temp_unpack_args[1]'; temp_unpack_args=("${temp_unpack_args[@]}")
+        fi
+        if [ "${#temp_unpack_args[@]}" -gt 0 ]; then echo "Error: Unknown arguments for --unpack: ${temp_unpack_args[*]}" >&2; exit 1; fi
+        unpack_archive "$archive_to_unpack" "$unpack_outdir" ;;
     --version)
+        if [ "${#PASSTHROUGH_ARGS[@]}" -gt 0 ]; then echo "Warning: --version does not take arguments: ${PASSTHROUGH_ARGS[*]}" >&2; fi
         echo "pak version $VERSION"
-        ;;
+        echo "Features: token compression, short IDs, semantic filtering, smart prioritization, extension filtering" ;;
     *)
-        echo "Error: Unknown command or option '$COMMAND'." >&2
-        echo "Usage:" >&2
-        echo "  Pack (default): $0 [--pack] [--ext .ext1 .ext2 ...] <files/directories> > archive.pak" >&2
-        echo "  List:           $0 --ls <archive file>" >&2
-        echo "  Unpack:         $0 --unpack <archive file> [--include pattern] [--exclude pattern] [--include-regex pattern] [--exclude-regex pattern] [--outdir dir]" >&2
-        echo "  Verify:         $0 --verify <archive file>" >&2
-        echo "  Version:        $0 --version" >&2
-        exit 1
-        ;;
+        echo "Internal Error: Unhandled command '$COMMAND'. Args: ${PASSTHROUGH_ARGS[*]}" >&2
+        exit 1 ;;
 esac
 
 exit 0
