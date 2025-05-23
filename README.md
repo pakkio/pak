@@ -123,11 +123,6 @@ pak --compress-level smart --max-tokens 16000 ./src > smart_archive.pak
 
 # Compressione leggera di specifici file
 pak main.py utils.py README.md --compress-level light > basic_bundle.pak
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-IGNORE_WHEN_COPYING_END
 
 2. Elenco dei contenuti dell'archivio:
 
@@ -136,12 +131,7 @@ pak --ls <file_archivio.pak>
 
 # Esempio
 pak --ls project_mini.pak
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
+
 
 3. Estrazione dell'archivio:
 
@@ -150,12 +140,7 @@ pak --unpack <file_archivio.pak>
 
 # Estrazione in una directory specifica
 pak --unpack project_mini.pak --outdir ./extracted_stuff
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
+
 
 4. Verifica dell'integrità dell'archivio:
 
@@ -164,23 +149,13 @@ pak --verify <file_archivio.pak>
 
 # Esempio
 pak --verify project_mini.pak
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
+
 
 5. Mostra versione:
 
 # Sintassi
 pak --version
-IGNORE_WHEN_COPYING_START
-content_copy
-download
-Use code with caution.
-Bash
-IGNORE_WHEN_COPYING_END
+
 Caratteristiche Avanzate introdotte dalla v2.x
 
 Modalità di Compressione dei Token:
