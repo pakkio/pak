@@ -1,4 +1,4 @@
-# Pak - Token-Optimized AST-Enhanced File Archiver for LLMs
+# Pak3 - Token-Optimized AST-Enhanced File Archiver for LLMs
 
 **Version: 2.2.9**
 
