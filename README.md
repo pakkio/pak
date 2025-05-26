@@ -1,191 +1,379 @@
-# Pak - Token-Optimized Text-Based File Archiver for LLMs
+# Pak: il tool che risolve il dramma quotidiano del copia-incolla con gli LLM
 
-**Version: 2.1.4**
+## Il problema che tutti abbiamo (ma che fingiamo di non vedere)
 
-## Abstract
+Sei un programmatore nel 2025. Usi Claude, GPT, o qualsiasi altro LLM per praticamente ogni attività di sviluppo. E ogni volta è la stessa **commedia dell'assurdo**:
 
-`pak` è un'utility da riga di comando scritta in Bash, ora potenziata per essere particolarmente efficiente in termini di token, progettata per combinare file e directory multipli in un unico archivio testuale leggibile (file `.pak`). Memorizza metadati di base (percorso, dimensione originale, conteggio linee e token stimati post-compressione) per ogni file. Fornisce comandi per impacchettare (con varie strategie di compressione), elencare i contenuti e scompattare questi archivi. Il suo formato testuale e le nuove capacità di compressione lo rendono ideale per preparare contesti per Large Language Models (LLM), minimizzando il consumo di token.
+- Devi condividere 5-10 file con l'LLM per avere il context giusto
+- Apri il primo file → Ctrl+A → Ctrl+C → vai nel chat → aggiungi "File: path/file.py" → Ctrl+V
+- Ripeti per ogni singolo file, pregando di non sbagliare l'ordine
+- Dopo 15 minuti hai un prompt che sembra un collage di appunti universitari
+- L'LLM ti risponde con codice modificato in blocchi separati
+- **Il vero incubo**: ora devi copiare ogni pezzo dall'LLM e salvarlo nel file giusto
+- Ti sbagli, sovrascrivi qualcosa di importante, e bestemmie in dialetto
 
-## Introduzione
+**Questo teatrino 20 volte al giorno.**
 
-Questo script fornisce un modo semplice e ottimizzato per i token per combinare diversi file in un unico pacchetto. A differenza dei formati binari come `.tar` o `.zip`, gli archivi `pak` sono file di testo semplice, ora con funzionalità avanzate per ridurre la loro dimensione in termini di token. Ciò è particolarmente utile per fornire contesto agli LLM, dove ogni token conta. Lo script include logica per escludere automaticamente artefatti di sviluppo comuni, file binari e file/directory nascosti, e ora offre diverse modalità di compressione del contenuto per un ulteriore risparmio di token.
+Se questo workflow ti suona familiare, Pak è nato per te.
 
-## Razionale
+## La soluzione: due tool, due filosofie, zero compromessi
 
-Perché `pak` in un mondo con `tar` e `zip`?
+Pak non è un singolo strumento, ma una **famiglia di tool** che risolve lo stesso problema con due approcci distinti:
 
-1.  **Ottimizzazione per LLM:** Progettato specificamente per creare archivi testuali compatti, riducendo il numero di token necessari per passare grandi quantità di codice o documentazione agli LLM.
-2.  **Semplicità e Trasparenza:** Il formato dell'archivio rimane testo semplice, usando marcatori chiari. Puoi aprire un file `.pak` in un editor di testo e capirne la struttura.
-3.  **Compressione Focalizzata sui Token:** Introduce livelli di compressione (`none`, `light`, `medium`, `aggressive`, `smart`) che mirano a rimuovere ridondanze e parti non essenziali per un LLM, come spazi eccessivi, commenti (opzionale) o estraendo solo strutture di codice chiave.
-4.  **Gestione del Budget di Token:** L'opzione `--max-tokens` permette di creare archivi che non superino un budget di token specificato, con una prioritizzazione intelligente dei file.
-5.  **Filtro Integrato e Semantico:** Esclude automaticamente file e directory temporanei/residuali comuni, file binari e offre un sistema di prioritizzazione semantica per la modalità "smart".
-6.  **Nessuna Dipendenza Esterna Rilevante:** Si basa su strumenti standard della riga di comando Unix/Linux (`bash`, `find`, `stat`, `wc`, `cat`, `awk`, `sed`, `grep`, `head`, `tr`), tipicamente disponibili.
-7.  **ID di Archivio Compatti:** Utilizza ID alfanumerici corti invece di UUID lunghi per i marcatori interni, risparmiando ulteriormente token.
+### **`pak`** - La via della semplicità
 
-## Esplicazione completa: Come funziona
+*"Voglio risolvere il problema, subito, senza installare nulla"*
 
-### Formato dell'archivio
+- **Bash puro**: funziona su qualsiasi sistema Unix senza dipendenze
+- **Zero setup**: scarichi, rendi eseguibile, funziona
+- **Compressione intelligente ma pragmatica**: rimuove spazi vuoti, commenti banali, ottimizza per la leggibilità dell'LLM
+- **Perfetto per**: workflow quotidiano, ambienti corporate con restrizioni, situazioni "voglio che funzioni e basta"
 
-Un archivio `.pak` generato da questo script è strutturato come una sequenza di voci di file, con un identificatore univoco (ID corto) all'inizio. Ogni voce segue questo schema:
+### **`pak3`** - La via della precisione chirurgica
 
+*"Lavoro intensivamente con LLM costosi e ogni token conta"*
 
-PAK_ID:aF30uOVUH0s5
+- **Analisi AST**: comprende la struttura sintattica del codice, non solo il testo
+- **Prioritizzazione semantica**: distingue automaticamente tra `README.md` (critico) e `test_utils.py` (sacrificabile)
+- **Budget management**: gestione rigorosa dei token con compressione adattiva
+- **Perfetto per**: progetti complessi, ottimizzazione token avanzata, workflow professionali intensivi
 
-Archive created with pak v2.1.4
-Archive ID: aF30uOVUH0s5
-Compression Mode: aggressive
-Extension Filter: .py .md
-Token Limit: 16000 (se specificato)
+## Esempi pratici: dalla teoria alla realtà
 
-PAK_FILE_aF30uOVUH0s5_START
-Path: relative/path/to/your/file.txt
-Size: <dimensione originale del file in byte>
-Lines: <numero di linee nel file dopo la compressione>
-Tokens: <numero stimato di token del file dopo la compressione>
-PAK_DATA_aF30uOVUH0s5_START
-<Contenuto del file, potenzialmente compresso>
-...
-PAK_DATA_aF30uOVUH0s5_END
+### Scenario 1: Debug veloce (usa `pak`)
 
-### Compressione (`--pack` o predefinito)
-
-1.  **Parsing Argomenti:** Lo script prima analizza le opzioni globali come `--compress-level` e `--max-tokens`.
-2.  **Generazione ID Archivio:** Viene generato un ID corto (es. 12 caratteri alfanumerici) per l'archivio.
-3.  **Iterazione e Filtri:** Itera attraverso i file e le directory forniti.
-    *   Applica filtri semantici (esclude `node_modules`, `.git`, file binari, ecc.).
-    *   Applica filtri per estensione se specificati con `--ext`.
-4.  **Compressione del Contenuto:** Per ogni file valido, il contenuto viene processato in base al `COMPRESSION_LEVEL`:
-    *   **`none`**: Nessuna compressione.
-    *   **`light`**: Rimozione di spazi eccessivi e linee vuote.
-    *   **`medium`**: Come `light`, più compressione di commenti e import (per alcuni tipi di file).
-    *   **`aggressive`**: Come `medium`, più estrazione di sole strutture di codice essenziali (es. definizioni di funzioni/classi per file di codice) o riduzione aggressiva per altri tipi di file.
-    *   **`smart`**: Modalità adattiva. Prioritizza i file in base a estensione e nome. Applica livelli di compressione variabili (da `light` a `aggressive`) per rispettare il `--max-tokens` budget, comprimendo di più i file meno importanti o se il budget è stretto.
-5.  **Metadati e Impacchettamento:** Per ogni file processato:
-    *   Vengono stampati i marcatori e i metadati (percorso, dimensione originale, linee e token post-compressione).
-    *   Il contenuto (compresso o meno) viene aggiunto.
-6.  **Output:** Tutto l'output viene inviato allo standard output, permettendo il reindirizzamento (`>`) per creare il file di archivio `.pak`.
-
-### Elenco (`--ls`)
-
-1.  Prende un percorso di file di archivio come input.
-2.  Legge l'ID dell'archivio dall'header.
-3.  Usa `awk` per elaborare il file, estraendo `Path`, `Size` e `Tokens` (se presente) per ogni file e li stampa.
-
-### Estrazione (`--unpack`)
-
-1.  Prende un percorso di file di archivio e opzionalmente `--outdir`.
-2.  Legge l'ID dell'archivio.
-3.  Scorre l'archivio, identifica i marcatori di ogni file.
-4.  Ricrea la struttura delle directory e scrive il contenuto di ogni file nella destinazione specificata.
-    *(Nota: le opzioni di filtro avanzate come --include / --exclude glob/regex della versione 1.x non sono attualmente reimplementate in questa linea di sviluppo focalizzata sulla compressione per LLM.)*
-
-### Verifica (`--verify`)
-
-1.  Prende un percorso di file di archivio.
-2.  Controlla la presenza dell'header ID, la corrispondenza dei marcatori di inizio/fine e la presenza dei metadati base per ogni file.
-3.  Riporta il numero di file trovati e il totale dei token dichiarati.
-
-## Installazione
-
-1.  Scarica lo script `pak` (o chiamalo `pak2` o come preferisci).
-2.  Rendilo eseguibile:
-    ```bash
-    chmod +x pak
-    ```
-3.  (Opzionale) Spostalo in una directory nel tuo `$PATH` (es. `/usr/local/bin` o `~/bin`):
-    ```bash
-    mv pak /usr/local/bin/
-    ```
-
-## Utilizzo
-
-Lo script opera in diversi modi:
-
-**1. Compressione di file/directory:**
+Il tuo server Node.js ha un bug nell'autenticazione:
 
 ```bash
-# Sintassi Base
-pak [GLOBAL_OPTS] [--pack] [PACK_OPTS] <files/dirs ...> > archive.pak
+# Con pak classico
+pak server.js routes/auth.js middleware/validation.js > bug-context.pak
+# Incolli il contenuto nel chat + "Bug nell'auth, token scaduto viene accettato"
+# L'LLM vede tutto il context necessario e ti dà la soluzione
+```
 
-# Global Options (prima del comando o dei file)
-#  --compress-level LEVEL : none, light, medium, aggressive, smart (default: none)
-#  --max-tokens N         : Limita i token totali (0 per illimitato, default: 0)
+**Tempo**: 30 secondi  
+**Complessità**: Zero  
+**Efficacia**: Perfetta per il 90% dei casi
 
-# Pack Options (mescolate con file/dir se --pack è esplicito, o dopo i file se implicito)
-#  --ext .ext1 .ext2 ...  : Includi solo file con queste estensioni/nomi (es. .py .md Makefile)
+### Scenario 2: Refactoring importante (usa `pak3`)
 
-# Esempi
-# Comprimi aggressivamente con limite di token, solo file Python e Markdown
-pak --compress-level aggressive --max-tokens 8000 --ext .py .md ./my_project > project_mini.pak
+Devi convertire un'intera app React da class components a hooks:
 
-# Compressione smart di una directory, priorità ai file wichtigen
-pak --compress-level smart --max-tokens 16000 ./src > smart_archive.pak
+```bash
+# Versione completa
+pak3 --compress-level smart --max-tokens 12000 src/ > refactoring.pak
 
-# Compressione leggera di specifici file
-pak main.py utils.py README.md --compress-level light > basic_bundle.pak
+# Versione concisa (identica)
+pak3 -cs -m 12000 src/ -o refactoring.pak
 
-2. Elenco dei contenuti dell'archivio:
+# L'LLM riceve:
+# - Struttura completa del progetto
+# - Priorità ai componenti principali  
+# - API surface dei file di supporto
+# - Budget token ottimizzato
+```
 
-# Sintassi
-pak --ls <file_archivio.pak>
+**Risultato**: Context preciso senza spreco di token, refactoring guidato e completo
 
-# Esempio
-pak --ls project_mini.pak
+### Scenario 3: Ambiente aziendale restrittivo (usa `pak`)
 
+Il tuo laptop di lavoro ha Python rotto, policy IT draconiane, e zero possibilità di installare dipendenze:
 
-3. Estrazione dell'archivio:
+```bash
+# pak funziona comunque (sintassi più spartana ma affidabile)
+pak --compress-level medium project/ --ext .java .xml > enterprise-safe.pak
+# oppure
+pak -c2 project/ --ext .java .xml > enterprise-safe.pak
+```
 
-# Sintassi base
-pak --unpack <file_archivio.pak>
+**Filosofia**: Il tool che funziona batte il tool perfetto che non riesci a far partire
 
-# Estrazione in una directory specifica
-pak --unpack project_mini.pak --outdir ./extracted_stuff
+## Installazione: scegli la tua strada
 
+### Per la semplicità (`pak`)
 
-4. Verifica dell'integrità dell'archivio:
+```bash
+curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak
+chmod +x pak
+sudo mv pak /usr/local/bin/
+```
 
-# Sintassi
-pak --verify <file_archivio.pak>
+**Done.** Zero dipendenze, funziona ovunque.
 
-# Esempio
-pak --verify project_mini.pak
+### Per la potenza (`pak3`)
 
+```bash
+# Scarica pak3
+curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak3
+curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak_core.py
+chmod +x pak3
+sudo mv pak3 pak_core.py /usr/local/bin/
 
-5. Mostra versione:
+# Installa le dipendenze per l'analisi AST (opzionale ma raccomandato)
+pip3 install --user tree-sitter tree-sitter-languages tree-sitter-python
 
-# Sintassi
-pak --version
+# Verifica che tutto funzioni
+pak3 --ast-info
+```
 
-Caratteristiche Avanzate introdotte dalla v2.x
+**Note**: Se non installi le dipendenze Python, pak3 **fallback automaticamente** alla compressione testuale. Non si rompe mai.
 
-Modalità di Compressione dei Token:
+## Cheat sheet: sintassi rapida per l'uso quotidiano
 
-none, light, medium, aggressive, smart per un controllo granulare sul contenuto e sul risparmio di token.
+### Pak3 - Comandi essenziali
+```bash
+# Pattern più comuni (memorizza questi!)
+pak3 . -c2 -o project.pak           # Tutto, medium compression
+pak3 src/ -cs -m 8000              # Smart mode, budget 8k
+pak3 -c3 -t py,md . -o minimal.pak # Solo Python/Markdown, aggressive
+pak3 -l archive.pak                # Lista contenuti
+pak3 -x archive.pak -d extracted/  # Estrai tutto
+pak3 -x archive.pak -p "test.*"    # Estrai solo test files
 
-Limite Massimo di Token (--max-tokens):
+# Livelli compressione shorthand
+-c0  # none (tutto)
+-c1  # light (spazi e commenti base)  
+-c2  # medium (commenti e ottimizzazioni)
+-c3  # aggressive (solo API surface)
+-cs  # smart (adattivo per importanza file)
 
-Assicura che l'archivio generato non superi una soglia di token specificata, cruciale per i limiti di contesto degli LLM.
+# Estensioni shorthand
+-t py,md,js     # invece di --ext .py .md .js
+-t java,xml     # invece di --ext .java .xml
+```
 
-Sistema di Prioritizzazione Semantica dei File (modalità smart):
+### Pak classico - Sintassi essenziale
+```bash
+# Comandi base pak (versione semplice)
+pak . > project.pak                 # Tutto senza compressione
+pak --compress-level medium src/    # Medium compression
+pak --ext .py .md src/ > docs.pak   # Solo Python e Markdown
+pak --ls project.pak                # Lista contenuti
+pak --unpack project.pak            # Estrai tutto
+```
 
-Quando si usa --compress-level smart e --max-tokens, i file vengono ordinati per importanza (basata su estensione, nomi come README, main, ecc.) e compressi in modo adattivo per rispettare il budget.
+## Guide d'uso: dal basic al professional
 
-Compressione Sintattica per File di Codice (modalità aggressive):
+### Pak classico: workflow essenziale
 
-Tenta di estrarre solo le parti strutturalmente importanti del codice (definizioni di funzioni/classi, import) per massimizzare il rapporto segnale/rumore per gli LLM.
+```bash
+# Impacchetta tutto
+pak . > progetto.pak
 
-Stima dei Token e Gestione del Budget:
+# Solo certi tipi di file
+pak --ext .py .md ./src > python-docs.pak
 
-Lo script stima i token per ogni file dopo la compressione e gestisce il conteggio totale.
+# Compressione media (rimuove commenti e spazi extra)
+pak --compress-level medium src/ > compressed.pak
 
-Limitazioni
+# Con limite di token approssimativo
+pak --max-tokens 8000 large-project/ > constrained.pak
 
-Focus sul Testo per LLM: Progettato e ottimizzato per file di testo da usare con LLM. La gestione di file binari è intenzionalmente limitata dalla lista SEMANTIC_EXCLUDES.
+# Vedi cosa hai impacchettato
+pak --ls progetto.pak
 
-Metadati: Memorizza percorso, dimensione originale, linee e token post-compressione. Non preserva permessi, proprietà o timestamp dettagliati (non tipicamente necessari per il contesto LLM).
+# Scompatta quando l'LLM ti ha risposto
+pak --unpack risposta.pak
+```
 
-Efficienza di Compressione vs. gzip: La "compressione" qui è più una "riduzione selettiva del contenuto testuale". Per la compressione dati generica, strumenti come gzip sono più appropriati.
+### Pak3: controllo chirurgico
 
-Robustezza delle Regex di Compressione: Le funzioni di compressione (specialmente medium e aggressive) usano espressioni regolari che sono euristiche e potrebbero non essere perfette per tutti i linguaggi di programmazione o stili di codice esotici.
+```bash
+# Sintassi completa vs. forma breve (equivalenti)
+pak3 --compress-level smart --max-tokens 12000 src/ > optimized.pak
+pak3 -cs -m 12000 src/ > optimized.pak
 
-Nomi di File: Nomi di file estremamente insoliti (es. contenenti newline) non sono testati e potrebbero causare problemi.
+# Solo API surface (per code review)
+pak3 --compress-level aggressive backend/ --ext .py .sql > api-review.pak
+pak3 -c3 -t py,sql backend/ > api-review.pak
+
+# Debug con prioritizzazione automatica e output automatico
+pak3 -cs -m 8000 -o debug-context.pak main.py utils/ config/
+
+# Estrazione con filtri regex
+pak3 -x response.pak -p ".*test.*" -d ./tests-only
+
+# Analisi dettagliata del contenuto
+pak3 -l -p ".*\\.py$" complex-project.pak
+
+# Quick reference comandi brevi:
+# -c[0-3,s]  : compressione (0=none, 1=light, 2=medium, 3=aggressive, s=smart)
+# -t py,md   : estensioni (senza punti, separate da virgole)
+# -m NUM     : max tokens
+# -o FILE    : output file (invece di stdout)
+# -q         : quiet mode
+# -l         : list contents
+# -x         : extract
+# -v         : verify
+# -p REGEX   : pattern filter
+# -d DIR     : output directory per extract
+```
+
+## Filosofia: perché due tool invece di uno?
+
+### La trappola del "tool unico universale"
+
+La maggior parte dei progetti open source cade nella **feature creep**: iniziano semplici, aggiungono funzionalità per ogni caso d'uso, e alla fine diventano complessi e fragili.
+
+Noi abbiamo fatto il contrario: **cristallizzato la semplicità** in `pak`, e **canalizzato la complessità** in `pak3`.
+
+### Quando usare cosa
+
+**Usa `pak` quando**:
+- Vuoi risolvere il problema velocemente
+- Sei in un ambiente con restrizioni 
+- Il tuo progetto è "normale" (< 50 file importanti)
+- Preferisci affidabilità a ottimizzazione estrema
+- Non hai voglia di pensare a dipendenze
+
+**Usa `pak3` quando**:
+- Lavori con LLM costosi intensivamente
+- Gestisci progetti complessi (> 100 file)
+- Ogni token risparmiato ha valore economico
+- Vuoi controllo granulare sulla compressione
+- Apprezzi l'analisi sintattica precisa
+
+## Trucchi del mestiere
+
+### Alias per workflow comuni (ora con comandi brevi!)
+
+```bash
+# Nel tuo .bashrc/.zshrc - versioni ultra-concise
+alias pak-quick='pak -c2 -m 8000'  # medium compression, 8k tokens
+alias pak3-smart='pak3 -cs -m 12000'  # smart mode, 12k budget
+alias pak3-mini='pak3 -c3 -m 6000'   # aggressive, 6k budget
+alias pak3-review='pak3 -c2 -t py,js,ts'  # code review setup
+
+# Template per situazioni comuni
+alias pak-bug='pak -c2'  # debug rapido
+alias pak-refactor='pak3 -cs -m 15000'  # refactoring complesso
+alias pak-deploy='pak3 -c1 -t py,sql,yml'  # deploy prep
+```
+
+### Quick commands per situazioni frecuenti
+
+```bash
+# "Ho bisogno di tutto, subito, formato standard"
+pak3 . -c2 -o project.pak
+
+# "Solo Python e Markdown, aggressive compression"
+pak3 src/ -c3 -t py,md -o minimal.pak
+
+# "Smart mode con budget preciso per GPT-4"
+pak3 . -cs -m 8000 -o gpt4-ready.pak
+
+# "Vediamo cosa c'è in questo pak senza scompattare"
+pak3 -l archive.pak
+
+# "Estrai solo i test"
+pak3 -x archive.pak -p "test.*" -d tests/
+
+# "Verifica rapidamente se il pak è valido"
+pak3 -v archive.pak
+```
+
+### Integrazione con Git
+
+```bash
+# Solo file modificati di recente
+git diff --name-only HEAD~5 | xargs pak > recent-changes.pak
+
+# Staging area per review
+git diff --cached --name-only | xargs pak3 --compress-level smart > staging-review.pak
+```
+
+### Template per richieste ricorrenti
+
+```bash
+# Crea template riutilizzabili
+echo "Analizza questo codice per problemi di performance e security:" > review-template.txt
+pak3 --compress-level medium src/ >> review-template.txt
+```
+
+## Casi d'uso reali (testati sul campo)
+
+### 1. **Code review distribuito**
+*"Il collega remoto deve revieware una feature"*
+```bash
+pak3 --compress-level light feature-branch/ > feature-review.pak
+# Mandi il .pak via Slack, il collega può leggerlo o scompattarlo localmente
+```
+
+### 2. **Debug assistito**
+*"C'è un bug complesso che coinvolge più moduli"*
+```bash
+pak --compress-level medium \
+    server.js \
+    routes/ \
+    models/ \
+    middleware/ > bug-hunting.pak
+# Context completo per l'LLM senza dispersioni
+```
+
+### 3. **Migrazione guidata**
+*"Converto da Python 3.8 a 3.12"*
+```bash
+pak3 --compress-level smart --max-tokens 15000 \
+     src/ requirements.txt setup.py > migration-context.pak
+# L'LLM vede struttura + dipendenze + codice prioritizzato
+```
+
+### 4. **Ottimizzazione performance**
+*"Questi componenti React renderizzano troppo"*
+```bash
+pak3 --compress-level aggressive \
+     --ext .jsx .js \
+     src/components/ > performance-review.pak
+# Solo API surface dei componenti, focus sulla logica di rendering
+```
+
+## Limitazioni oneste
+
+### Pak classico
+- **Stima token approssimativa**: `len(content) / 4` è una euristica, non scienza
+- **Compressione testuale**: intelligente ma non sintattica
+- **Prioritizzazione basic**: basata su estensioni e pattern di nomi
+
+### Pak3
+- **Dipendenze Python**: tree-sitter richiede setup aggiuntivo
+- **Complessità**: più opzioni = più modi per sbagliare configurazione
+- **Curva di apprendimento**: la modalità smart richiede comprensione del progetto
+
+### Entrambi
+- **Non è magia**: 100k linee non diventano 1k token mantenendo tutto il context
+- **Qualità input = qualità output**: se il progetto è un casino architetturale, pak non fa miracoli
+- **Context window limits**: anche con compressione, progetti enormi richiedono selezione manuale
+
+## Evoluzione: dal problema personale al tool pubblico
+
+Pak è nato dalla frustrazione personale di uno sviluppatore che passava più tempo a formattare prompt che a programmare. 
+
+La **versione 1** era uno script bash di 50 righe che concatenava file. Funzionava, ma era spartano.
+
+La **versione 2** ha aggiunto compressione intelligente, gestione token, filtri semantici. Già usabile professionalmente.
+
+La **versione 3** introduce analisi AST, prioritizzazione avanzata, fallback robusti. Per chi fa sul serio.
+
+Ma la **filosofia core** è rimasta la stessa: **risolvere un problema reale senza cerimonie**.
+
+## Conclusione: il tool che avresti dovuto avere ieri
+
+Pak non rivoluziona il mondo. Non usa AI per l'AI. Non ha una startup unicorno dietro.
+
+**Semplicemente funziona.** 
+
+Risolve un problema quotidiano fastidioso in modo elegante, affidabile, e senza pretese filosofiche eccessive.
+
+Se lavori con LLM regolarmente, hai due scelte:
+1. Continuare con il balletto del copia-incolla (e perdere 20 minuti al giorno per sempre)
+2. Investire 5 minuti per scaricare pak e recuperare ore ogni settimana
+
+La matematica è semplice. La scelta è tua.
+
+---
+
+**Download**: https://github.com/pakkio/pak  
+**Tempo di setup**: 5 minuti  
+**ROI**: Ogni giorno che passa  
+**Filosofia**: Pragmatismo senza compromessi  
+**Garanzia**: Se non ti semplifica la vita, hai perso solo 5 minuti. Se ti semplifica la vita, hai guadagnato ore per sempre.
