@@ -1,21 +1,23 @@
 #!/bin/bash
 # pak3 v3.1.0 - Enhanced with regex extraction filtering
 # Usage: pak3 [dirs/files] [options]
-# Example: pak3 . -t py md -c2 -m 8000 -o project.pak
+# Example: pak3 . -t py,md -c2 -m 8000 -o project.pak
 
 VERSION="3.1.0"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 PAK_CORE_PY="$SCRIPT_DIR/pak_core.py"
 
-# Defaults - much simpler now
+# Defaults
 COMPRESSION_LEVEL="none"
 MAX_TOKENS=0
 OUTPUT_FILE=""
 INCLUDE_EXTENSIONS=()
 TARGETS=()
 QUIET=false
-COMMAND="pack"
+COMMAND="pack" # Default command
 EXTRACT_PATTERN=""
+EXTRACT_DIR="."
+
 
 usage() {
     cat << EOF
@@ -23,7 +25,7 @@ pak3 v$VERSION - Concise LLM-optimized file archiver with regex filtering
 
 USAGE:
   pak3 [targets] [options]                    # Pack (default)
-  pak3 -l archive.pak                        # List contents  
+  pak3 -l archive.pak [-p regex]             # List contents (with optional pattern filter)
   pak3 -x archive.pak [-d outdir] [-p regex] # Extract (with optional pattern filter)
   pak3 -v archive.pak                        # Verify
 
@@ -33,15 +35,18 @@ TARGETS:
   main.py readme.md    Specific files
 
 PACK OPTIONS:
-  -t ext1,ext2         Extensions (py,md,js,ts,cpp,h,go,rs,java)
-  -c LEVEL             Compression: 0=none, 1=light, 2=medium, 3=aggressive, s=smart
-  -m NUM               Max tokens (0=unlimited)
-  -o FILE              Output file (default: stdout or auto-generated)
-  -q                   Quiet mode
+  -t ext1,ext2         Extensions (py,md,js,ts,cpp,h,go,rs,java). Separated by comma or space.
+                       Example: -t py,md or -t "py md" or -tpy,md
+  -c LEVEL             Compression: 0=none, 1=light, 2=medium, 3=aggressive, s=smart.
+                       Example: -c2 or -c s or -cmedium
+  -m NUM               Max tokens (0=unlimited). Example: -m8000 or -m 8000
+  -o FILE              Output file (default: stdout or auto-generated if stdout is a TTY).
+                       Example: -o project.pak or -oproject.pak
+  -q                   Quiet mode.
 
-EXTRACT OPTIONS:
-  -p PATTERN           Extract only files matching regex pattern (applied to filename)
-  -d DIR               Extract to specific directory
+EXTRACT/LIST OPTIONS:
+  -p PATTERN           Filter files matching regex pattern (applied to full path).
+  -d DIR               (Extract only) Extract to specific directory.
 
 QUICK EXAMPLES:
   pak3 . -t py,md -c2                         # Medium compression, Python+Markdown
@@ -54,64 +59,67 @@ EXTRACTION EXAMPLES:
   pak3 -x project.pak -d ./extracted         # Extract to specific dir
   pak3 -x project.pak -p "test_.*"           # Extract only test files
   pak3 -x project.pak -p ".*\\.py$"          # Extract only Python files
-  pak3 -x project.pak -p "(main|config)"     # Extract main or config files
-  pak3 -x project.pak -p "src/.*api.*"       # Extract API-related files from src
 
 OTHER:
   pak3 -l project.pak                         # List contents
   pak3 -v project.pak                         # Verify integrity
   pak3 -h                                     # This help
 
-REGEX PATTERN NOTES:
-  - Applied to the full file path (e.g., "src/utils/helper.py")
-  - Use standard regex syntax: .* = any chars, \\. = literal dot, $ = end of string
-  - Case sensitive by default
-  - Examples: "test_.*\\.py$" = test Python files, ".*/(config|setup).*" = config/setup files
-
+REGEX PATTERN NOTES (for -p):
+  - Applied to the full file path (e.g., "src/utils/helper.py").
+  - Uses standard regex syntax. Case sensitive by default.
+  - Examples: "test_.*\\.py$" (test Python files), ".*/(config|setup).*" (config/setup files).
 EOF
 }
 
-# Parse compression level shorthand
 parse_compression() {
     case "$1" in
-        0) echo "none" ;;
-        1) echo "light" ;;
-        2) echo "medium" ;;
-        3) echo "aggressive" ;;
-        s|smart) echo "smart" ;;
-        none|light|medium|aggressive|smart) echo "$1" ;;
-        *) echo "Error: Invalid compression level '$1'. Use 0-3 or s." >&2; exit 1 ;;
+        0|none) echo "none" ;;
+        1|light) echo "light" ;;
+        2|medium) echo "medium" ;;
+        3|aggressive) echo "aggressive" ;;
+        s|S|smart) echo "smart" ;;
+        *) echo "Error: Invalid compression level '$1'. Use 0-3, s, or full names." >&2; usage; exit 1 ;;
     esac
 }
 
-# Parse extensions shorthand  
 parse_extensions() {
     local ext_string="$1"
     local -a exts
     
-    # Split by comma or space
-    IFS=',' read -ra ADDR <<< "$ext_string"
-    for ext in "${ADDR[@]}"; do
-        # Add leading dot if missing
+    # Normalize: replace commas with spaces for consistent splitting
+    local normalized_ext_string="${ext_string//,/ }"
+    
+    # Read into array, splitting by spaces (IFS default)
+    read -ra ADDR <<< "$normalized_ext_string"
+    
+    for ext_raw in "${ADDR[@]}"; do
+        # Trim whitespace from each extension part
+        local ext="${ext_raw#"${ext_raw%%[![:space:]]*}"}" # trim leading whitespace
+        ext="${ext%"${ext##*[![:space:]]}"}"               # trim trailing whitespace
+        
+        if [ -z "$ext" ]; then continue; fi # Skip empty strings
+
         if [[ "$ext" != .* ]]; then
             ext=".$ext"
         fi
         exts+=("$ext")
     done
     
+    # Print each extension on a new line, to be read by readarray
     printf '%s\n' "${exts[@]}"
 }
 
-# Auto-generate output filename
 auto_output_name() {
     local base_name="archive"
-    
-    # Try to use directory name if packing single directory
     if [ ${#TARGETS[@]} -eq 1 ] && [ -d "${TARGETS[0]}" ]; then
         base_name=$(basename "${TARGETS[0]}")
-        if [ "$base_name" = "." ]; then
+        if [ "$base_name" = "." ] || [ -z "$base_name" ]; then # Handle "." or empty basename if PWD is root
             base_name=$(basename "$PWD")
         fi
+    elif [ ${#TARGETS[@]} -gt 0 ]; then
+        base_name=$(basename "${TARGETS[0]}")
+        base_name="${base_name%.*}_collection" # If first target is a file or multiple targets
     fi
     
     # Add compression suffix
@@ -125,221 +133,82 @@ auto_output_name() {
     echo "${base_name}.pak"
 }
 
-# Check if Python core is available
 has_python_core() {
     [ -f "$PAK_CORE_PY" ] && python3 -c "import sys; sys.path.insert(0, '$SCRIPT_DIR'); import pak_core" 2>/dev/null
 }
 
-# Delegate to Python core if available, fallback to bash
 pack_files() {
     local python_args=()
     
-    # Build arguments for Python core
     python_args+=("--compression-level" "$COMPRESSION_LEVEL")
     if [ "$MAX_TOKENS" -gt 0 ]; then
         python_args+=("--max-tokens" "$MAX_TOKENS")
     fi
     
     if [ ${#INCLUDE_EXTENSIONS[@]} -gt 0 ]; then
-        python_args+=("--ext")
-        python_args+=("${INCLUDE_EXTENSIONS[@]}")
+        python_args+=("--ext" "${INCLUDE_EXTENSIONS[@]}")
+    fi
+
+    if $QUIET; then
+        python_args+=("--quiet")
     fi
     
-    python_args+=("${TARGETS[@]}")
+    if [ ${#TARGETS[@]} -gt 0 ]; then
+        python_args+=("${TARGETS[@]}")
+    fi # Else, pak_core.py defaults to ["."]
     
     if has_python_core; then
-        if ! $QUIET; then
-            echo "pak3: Using Python core for enhanced processing" >&2
-        fi
-        python3 -c "
-import sys
-sys.path.insert(0, '$SCRIPT_DIR')
-from pak_core import main as pak_main
-sys.argv = ['pak_core'] + '''${python_args[*]}'''.split()
-pak_main()
-"
-    else
-        if ! $QUIET; then
-            echo "pak3: Python core not available, using simplified bash mode" >&2
-        fi
-        # Fallback to simplified bash implementation
-        bash_pack_fallback "${python_args[@]}"
-    fi
-}
-
-# Simplified bash fallback (basic functionality)
-bash_pack_fallback() {
-    local archive_id=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12)
-    
-    echo "__PAK_ID__:${archive_id}"
-    echo "# Archive created with pak v$VERSION (bash fallback)"
-    echo "# Archive ID: $archive_id"
-    echo "# Compression Mode: $COMPRESSION_LEVEL"
-    
-    local token_count=0
-    
-    for target in "${TARGETS[@]}"; do
-        if [ -f "$target" ]; then
-            if should_include_file "$target"; then
-                pack_single_file "$target" "$archive_id" token_count
-            fi
-        elif [ -d "$target" ]; then
-            while IFS= read -r -d '' file; do
-                if should_include_file "$file"; then
-                    pack_single_file "$file" "$archive_id" token_count
-                    if [ "$MAX_TOKENS" -gt 0 ] && [ "$token_count" -ge "$MAX_TOKENS" ]; then
-                        echo "pak3: Token limit reached" >&2
-                        break 2
-                    fi
-                fi
-            done < <(find "$target" -type f -print0)
-        fi
-    done
-    
-    echo "# Archive complete. Total estimated tokens: $token_count" >&2
-}
-
-should_include_file() {
-    local file="$1"
-    
-    # Extension filter
-    if [ ${#INCLUDE_EXTENSIONS[@]} -gt 0 ]; then
-        local filename=$(basename "$file")
-        local matches=false
-        for ext in "${INCLUDE_EXTENSIONS[@]}"; do
-            if [[ "$filename" == *"$ext" ]]; then
-                matches=true
-                break
-            fi
+        if ! $QUIET; then echo "pak3: Using Python core for enhanced processing." >&2; fi
+        # Prepare arguments for sys.argv in Python
+        # Each element of python_args becomes a separate item in the Python list
+        local py_command="import sys; sys.path.insert(0, '$SCRIPT_DIR'); from pak_core import main as pak_main; sys.argv = ['pak_core']"
+        for arg in "${python_args[@]}"; do
+            # Escape single quotes within arguments for the Python string
+            local escaped_arg="${arg//\'/\'\\\'\'}"
+            py_command+=" + ['$escaped_arg']"
         done
-        if ! $matches; then
-            return 1
-        fi
-    fi
-    
-    # Basic exclusions
-    case "$file" in
-        */.git/*|*/node_modules/*|*/__pycache__/*|*.pyc|*.pak) return 1 ;;
-    esac
-    
-    return 0
-}
+        py_command+="; pak_main()"
+        
+        python3 -c "$py_command"
 
-pack_single_file() {
-    local file="$1"
-    local archive_id="$2"
-    local -n token_count_ref=$3
-    
-    local size=$(stat -c%s "$file" 2>/dev/null || echo "0")
-    local content=$(cat "$file")
-    local lines=$(echo "$content" | wc -l)
-    local tokens=$((${#content} / 4))
-    
-    token_count_ref=$((token_count_ref + tokens))
-    
-    echo "__PAK_FILE_${archive_id}_START__"
-    echo "Path: $file"
-    echo "Size: $size"
-    echo "Lines: $lines"
-    echo "Tokens: $tokens"
-    echo "Method: bash-fallback"
-    echo "__PAK_DATA_${archive_id}_START__"
-    echo "$content"
-    echo "__PAK_DATA_${archive_id}_END__"
-}
-
-# List archive contents with optional pattern filtering
-list_archive() {
-    local archive_file="$1"
-    local pattern="$2"
-    
-    if [ ! -f "$archive_file" ]; then
-        echo "Error: Archive file not found: $archive_file" >&2
-        exit 1
-    fi
-    
-    # Extract archive ID
-    local first_line
-    read -r first_line < "$archive_file"
-    local archive_id="${first_line#__PAK_ID__:}"
-    
-    if [ -z "$archive_id" ]; then
-        echo "Error: Invalid pak archive" >&2
-        exit 1
-    fi
-    
-    echo "Archive: $archive_file (ID: $archive_id)"
-    if [ -n "$pattern" ]; then
-        echo "Filter: $pattern"
-    fi
-    echo
-    
-    awk -v FILE_START="__PAK_FILE_${archive_id}_START__" -v PATTERN="$pattern" '
-    $0 == FILE_START { in_file=1; next }
-    in_file && /^Path: / { path = substr($0, 7); next }
-    in_file && /^Size: / { size = substr($0, 7); next }
-    in_file && /^Tokens: / { tokens = substr($0, 9); next }
-    in_file && /^Method: / { method = substr($0, 9); next }
-    in_file && /^__PAK_DATA_/ { 
-        if (PATTERN == "" || path ~ PATTERN) {
-            printf "%-50s %8s bytes %6s tokens [%s]\n", path, size, tokens, method
-        }
-        in_file=0; path=""; size=""; tokens=""; method=""
-    }
-    ' "$archive_file"
-}
-
-# Extract archive with optional pattern filtering
-extract_archive() {
-    local archive_file="$1"
-    local outdir="${2:-.}"
-    local pattern="$3"
-    
-    if [ ! -f "$archive_file" ]; then
-        echo "Error: Archive file not found: $archive_file" >&2
-        exit 1
-    fi
-    
-    if has_python_core; then
-        python3 -c "
-import sys
-sys.path.insert(0, '$SCRIPT_DIR')
-from pak_core import extract_archive
-extract_archive('$archive_file', '$outdir', pattern='$pattern')
-"
     else
-        echo "Error: Extraction requires Python core (pak_core.py)" >&2
-        exit 1
+        if ! $QUIET; then echo "pak3: Python core '$PAK_CORE_PY' not available or importable. Cannot pack." >&2; fi
+        exit 1 # Cannot fallback for packing if core is missing
     fi
 }
 
-# Verify archive
-verify_archive() {
-    local archive_file="$1"
-    
-    if [ ! -f "$archive_file" ]; then
-        echo "Error: Archive file not found: $archive_file" >&2
+# List/Extract/Verify functions that call Python core
+call_python_core_command() {
+    local py_func_name="$1"
+    local archive_file_arg="$2"
+    local output_dir_arg="$3" # Only for extract
+    local pattern_arg="$4"
+
+    if ! has_python_core; then
+        echo "pak3: Python core '$PAK_CORE_PY' not available or importable. Cannot execute '$COMMAND'." >&2
         exit 1
     fi
-    
-    echo "Verifying: $archive_file"
-    
-    # Basic verification
-    local first_line
-    read -r first_line < "$archive_file"
-    
-    if [[ "$first_line" == __PAK_ID__:* ]]; then
-        local archive_id="${first_line#__PAK_ID__:}"
-        local file_count=$(grep -c "__PAK_FILE_${archive_id}_START__" "$archive_file")
-        echo "✓ Valid pak archive (ID: $archive_id, Files: $file_count)"
-    else
-        echo "✗ Invalid pak archive format"
-        exit 1
+
+    local escaped_archive_file_arg="${archive_file_arg//\'/\'\\\'\'}"
+
+    local py_command="import sys; sys.path.insert(0, '$SCRIPT_DIR'); from pak_core import $py_func_name as cmd_func;"
+    py_command+="cmd_func(archive_path='$escaped_archive_file_arg'"
+    if [ "$COMMAND" == "extract" ]; then
+         local escaped_output_dir_arg="${output_dir_arg//\'/\'\\\'\'}"
+         py_command+=", output_dir='$escaped_output_dir_arg'"
     fi
+    if [ -n "$pattern_arg" ]; then # Only add pattern if it's set
+        # Escape single quotes within the pattern argument for the Python string
+        local escaped_pattern_arg="${pattern_arg//\'/\'\\\'\'}"
+        py_command+=", pattern='$escaped_pattern_arg'"
+    fi
+    py_command+=")"
+    
+    python3 -c "$py_command"
 }
 
-# Two-pass argument parsing for better command detection
-# First pass: detect command type
+
+# Determine command first (list, extract, verify, or pack by default)
 TEMP_ARGS=("$@")
 for arg in "${TEMP_ARGS[@]}"; do
     case "$arg" in
@@ -349,103 +218,105 @@ for arg in "${TEMP_ARGS[@]}"; do
     esac
 done
 
-# Main argument parsing
+
+# Main argument parsing loop
 while [ $# -gt 0 ]; do
-    case "$1" in
-        -h|--help)
-            usage
-            exit 0
+    current_arg="$1"
+    case "$current_arg" in
+        -h|--help) usage; exit 0 ;;
+        -l|--list) COMMAND="list"; shift ;;
+        -x|--extract) COMMAND="extract"; shift ;;
+        -v|--verify) COMMAND="verify"; shift ;;
+        -q|--quiet) QUIET=true; shift ;;
+
+        -c[0-9]|"-c"[sS]) # Attached: -c0, -c1, -c2, -c3, -cs, -cS
+            LEVEL_ARG="${current_arg#-c}"
+            COMPRESSION_LEVEL=$(parse_compression "$LEVEL_ARG")
+            shift 
             ;;
-        -l|--list)
-            COMMAND="list"
+        -c|--compression) # Separated: -c VAL
+            shift 
+            if [ $# -eq 0 ] || [[ "$1" == -* ]]; then echo "Error: -c requires compression level value." >&2; usage; exit 1; fi
+            COMPRESSION_LEVEL=$(parse_compression "$1")
+            shift 
+            ;;
+
+        -t?*) # Attached: -tpy,md or -t.py
+            TYPES_VAL="${current_arg#-t}"
+            readarray -t INCLUDE_EXTENSIONS < <(parse_extensions "$TYPES_VAL")
             shift
             ;;
-        -x|--extract)
-            COMMAND="extract"
+        -t|--types) # Separated: -t VAL
+            shift
+            if [ $# -eq 0 ] || [[ "$1" == -* ]]; then echo "Error: -t requires extension list value." >&2; usage; exit 1; fi
+            readarray -t INCLUDE_EXTENSIONS < <(parse_extensions "$1")
             shift
             ;;
-        -v|--verify)
-            COMMAND="verify"
+
+        -m[0-9]*) # Attached: -mNUM
+            TOKEN_ARG="${current_arg#-m}"
+            if ! [[ "$TOKEN_ARG" =~ ^[0-9]+$ ]]; then echo "Error: -m value must be a number. Got '$TOKEN_ARG' from '$current_arg'." >&2; usage; exit 1; fi
+            MAX_TOKENS="$TOKEN_ARG"
             shift
             ;;
-        -d|--outdir)
+        -m|--max-tokens) # Separated: -m NUM
             shift
-            if [ $# -eq 0 ]; then
-                echo "Error: -d requires directory path" >&2
-                exit 1
-            fi
+            if [ $# -eq 0 ] || [[ "$1" == -* ]]; then echo "Error: -m requires token count value." >&2; usage; exit 1; fi
+            if ! [[ "$1" =~ ^[0-9]+$ ]]; then echo "Error: -m value must be a number. Got '$1'." >&2; usage; exit 1; fi
+            MAX_TOKENS="$1"
+            shift
+            ;;
+        
+        -o?*) # Attached: -ofile.pak
+            OUTPUT_FILE="${current_arg#-o}"
+            shift
+            ;;
+        -o|--output) # Separated: -o file.pak
+            shift
+            if [ $# -eq 0 ] || [[ "$1" == -* ]]; then echo "Error: -o requires filename value." >&2; usage; exit 1; fi
+            OUTPUT_FILE="$1"
+            shift
+            ;;
+
+        -d?*) # Attached: -d./out
+            EXTRACT_DIR="${current_arg#-d}"
+            shift
+            ;;
+        -d|--outdir) # Separated: -d ./out
+            shift
+            if [ $# -eq 0 ] || [[ "$1" == -* ]]; then echo "Error: -d requires directory path value." >&2; usage; exit 1; fi
             EXTRACT_DIR="$1"
             shift
             ;;
-        -p|--pattern)
+        
+        -p?*) # Attached: -p"mypattern"
+            EXTRACT_PATTERN="${current_arg#-p}"
             shift
-            if [ $# -eq 0 ]; then
-                echo "Error: -p requires regex pattern" >&2
-                exit 1
+            ;;
+        -p|--pattern) # Separated: -p "mypattern"
+            shift
+            if [ $# -eq 0 ]; then # Pattern can be empty string, but not missing
+                 echo "Error: -p requires a regex pattern value (can be empty string for no filter if Python handles it)." >&2; usage; exit 1; 
             fi
             EXTRACT_PATTERN="$1"
             shift
             ;;
-        -t|--types)
-            shift
-            if [ $# -eq 0 ]; then
-                echo "Error: -t requires extension list" >&2
-                exit 1
-            fi
-            readarray -t INCLUDE_EXTENSIONS < <(parse_extensions "$1")
-            shift
-            ;;
-        -c|--compression)
-            shift
-            if [ $# -eq 0 ]; then
-                echo "Error: -c requires compression level" >&2
-                exit 1
-            fi
-            COMPRESSION_LEVEL=$(parse_compression "$1")
-            shift
-            ;;
-        -m|--max-tokens)
-            shift
-            if [ $# -eq 0 ]; then
-                echo "Error: -m requires token count" >&2
-                exit 1
-            fi
-            MAX_TOKENS="$1"
-            shift
-            ;;
-        -o|--output)
-            shift
-            if [ $# -eq 0 ]; then
-                echo "Error: -o requires filename" >&2
-                exit 1
-            fi
-            OUTPUT_FILE="$1"
-            shift
-            ;;
-        -q|--quiet)
-            QUIET=true
-            shift
-            ;;
-        -*)
-            echo "Error: Unknown option $1" >&2
+
+        -*) # Catch-all for unknown options starting with -
+            echo "Error: Unknown option: $current_arg" >&2
             usage >&2
             exit 1
             ;;
-        *)
-            # Handle positional arguments based on command type
-            case "$COMMAND" in
-                list|extract|verify)
-                    if [ -z "$ARCHIVE_FILE" ]; then
-                        ARCHIVE_FILE="$1"
-                    else
-                        echo "Error: Multiple archive files specified for $COMMAND command" >&2
-                        exit 1
-                    fi
-                    ;;
-                pack)
-                    TARGETS+=("$1")
-                    ;;
-            esac
+        *) # Positional arguments (targets for pack, or archive_file for other commands)
+            if [ "$COMMAND" == "pack" ]; then
+                TARGETS+=("$current_arg")
+            else # list, extract, verify
+                if [ -z "$ARCHIVE_FILE" ]; then
+                    ARCHIVE_FILE="$current_arg"
+                else
+                    echo "Error: Too many archive files specified for $COMMAND operation. Expected one." >&2; usage; exit 1;
+                fi
+            fi
             shift
             ;;
     esac
@@ -455,45 +326,82 @@ done
 case "$COMMAND" in
     pack)
         if [ ${#TARGETS[@]} -eq 0 ]; then
-            TARGETS=(".")
+            TARGETS=(".") # Default target is current directory if none specified
         fi
         
-        # Auto-generate output file if not specified and not using stdout
-        if [ -z "$OUTPUT_FILE" ] && [ -t 1 ]; then
+        if [ -z "$OUTPUT_FILE" ] && [ -t 1 ]; then # If stdout is a TTY and no -o
             OUTPUT_FILE=$(auto_output_name)
-            if ! $QUIET; then
-                echo "pak3: Auto-generated output: $OUTPUT_FILE" >&2
-            fi
+            if ! $QUIET; then echo "pak3: Auto-generated output file: $OUTPUT_FILE" >&2; fi
         fi
         
         if [ -n "$OUTPUT_FILE" ]; then
             pack_files > "$OUTPUT_FILE"
-            if ! $QUIET; then
-                echo "pak3: Created $OUTPUT_FILE ($(stat -c%s "$OUTPUT_FILE" 2>/dev/null || echo "?") bytes)" >&2
+            # pak_core.py might print its own completion message to stderr if not quiet
+            if [ -f "$OUTPUT_FILE" ] && ! $QUIET; then
+                 # Check if file was actually created and has size (pack_files exits on python core error)
+                 if [ -s "$OUTPUT_FILE" ] || { [ ! -s "$OUTPUT_FILE" ] && [ "$(stat -c%s "$OUTPUT_FILE" 2>/dev/null)" == "0" ]; }; then
+                    echo "pak3: Archive created: $OUTPUT_FILE ($(stat -c%s "$OUTPUT_FILE" 2>/dev/null || echo "0") bytes)" >&2
+                 else
+                    echo "pak3: Warning: Output file $OUTPUT_FILE might be empty or not created." >&2
+                 fi
+            elif [ ! -f "$OUTPUT_FILE" ] && ! $QUIET ; then
+                echo "pak3: Error: Output file $OUTPUT_FILE was not created." >&2
             fi
         else
-            pack_files
+            pack_files # Output to stdout
         fi
         ;;
     list)
-        if [ -z "$ARCHIVE_FILE" ]; then
-            echo "Error: No archive file specified for listing" >&2
-            exit 1
-        fi
-        list_archive "$ARCHIVE_FILE" "$EXTRACT_PATTERN"
+        if [ -z "$ARCHIVE_FILE" ]; then echo "Error: No archive file specified for listing." >&2; usage; exit 1; fi
+        call_python_core_command "list_archive_contents" "$ARCHIVE_FILE" "" "$EXTRACT_PATTERN"
         ;;
     extract)
-        if [ -z "$ARCHIVE_FILE" ]; then
-            echo "Error: No archive file specified for extraction" >&2
-            exit 1
-        fi
-        extract_archive "$ARCHIVE_FILE" "${EXTRACT_DIR:-.}" "$EXTRACT_PATTERN"
+        if [ -z "$ARCHIVE_FILE" ]; then echo "Error: No archive file specified for extraction." >&2; usage; exit 1; fi
+        call_python_core_command "extract_archive" "$ARCHIVE_FILE" "$EXTRACT_DIR" "$EXTRACT_PATTERN"
         ;;
     verify)
-        if [ -z "$ARCHIVE_FILE" ]; then
-            echo "Error: No archive file specified for verification" >&2
+        if [ -z "$ARCHIVE_FILE" ]; then echo "Error: No archive file specified for verification." >&2; usage; exit 1; fi
+        echo "Verifying: $ARCHIVE_FILE (basic check)" >&2
+        
+        first_line="" 
+        if ! IFS= read -r first_line < "$ARCHIVE_FILE"; then
+            echo "Error: Cannot read archive file $ARCHIVE_FILE for verification." >&2
             exit 1
         fi
-        verify_archive "$ARCHIVE_FILE"
+
+        if [[ "$first_line" == __PAK_UUID__:?* || "$first_line" == __PAK_ID__:?* ]]; then
+            archive_id=""
+            if [[ "$first_line" == __PAK_UUID__:?* ]]; then
+                archive_id="${first_line#__PAK_UUID__:}"
+            else
+                archive_id="${first_line#__PAK_ID__:}"
+            fi
+
+            if [ -z "$archive_id" ]; then
+                 echo "✗ Invalid pak archive format: Empty UUID/ID in header." >&2
+                 exit 1
+            fi
+            
+            file_count=$(grep -c "__PAK_FILE_${archive_id}_START__" "$ARCHIVE_FILE")
+            data_start_count=$(grep -c "__PAK_DATA_${archive_id}_START__" "$ARCHIVE_FILE")
+            data_end_count=$(grep -c "__PAK_DATA_${archive_id}_END__" "$ARCHIVE_FILE")
+            
+            # Ensure counts are treated as 0 if grep returns nothing or fails
+            file_count=${file_count:-0}
+            data_start_count=${data_start_count:-0}
+            data_end_count=${data_end_count:-0}
+
+            echo "✓ Basic structure: ID/UUID: $archive_id, Files: $file_count, Data Blocks: $data_start_count (start), $data_end_count (end)"
+            if [ "$file_count" -eq "$data_start_count" ] && [ "$data_start_count" -eq "$data_end_count" ]; then
+                 echo "✓ Marker counts match."
+            else
+                 echo "✗ Warning: Marker counts mismatch. (Files: $file_count, Data Starts: $data_start_count, Data Ends: $data_end_count)"
+            fi
+        else
+            echo "✗ Invalid pak archive format: Missing or incorrect __PAK_UUID__ or __PAK_ID__ header."
+            exit 1
+        fi
         ;;
 esac
+
+exit 0
