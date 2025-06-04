@@ -1,8 +1,8 @@
 """
 pak_core.py - Python business logic for pak4
-Enhanced pak3 core with LLM semantic compression support
-Consolidates AST analysis, smart compression, and semantic LLM compression
-MODIFIED: SemanticCompression class now ALWAYS applies semantic compression.
+Enhanced pak3 core with LLM semantic compression support + full command support
+Consolidates AST analysis, smart compression, semantic LLM compression, listing, and extraction
+MODIFIED: Added subcommand support, detailed listing, and enhanced logging
 """
 import sys
 import os
@@ -30,7 +30,7 @@ except ImportError:
     Language = Any # type: ignore
     Parser = Any # type: ignore
 
-VERSION = "4.0.1-always-semantic"
+VERSION = "4.0.1-full-command-support"
 
 @dataclass
 class FileEntry:
@@ -498,7 +498,7 @@ class ASTCompression(CompressionStrategy):
                     return
 
                 if "definition" in current_node.type or "declaration" in current_node.type or \
-                   current_node.type in ["import_statement", "export_statement"]:
+                        current_node.type in ["import_statement", "export_statement"]:
                     header = self._extract_definition_header(current_node, source_bytes, language)
                     elements.append(header + " ...")
 
@@ -523,9 +523,6 @@ class SemanticCompression(CompressionStrategy):
             if not os.environ.get('PAK_QUIET', '').lower() == 'true':
                 print("pak_core: Semantic compressor not found, falling back to AST/aggressive", file=sys.stderr)
             return self.fallback_strategy.compress(content, file_path, language)
-
-        # REMOVED: Size check (< 200 bytes)
-        # REMOVED: Data file type exclusions
 
         # Only skip completely empty files
         if not content.strip():
@@ -1062,10 +1059,15 @@ class SmartArchiver:
             compressed_content, method_desc = chosen_strategy.compress(content, file_path, lang)
             compressed_tokens = self._estimate_tokens_from_str(compressed_content)
 
+            # ENHANCED LOGGING: Add detailed progress info
+            if not self.config.quiet:
+                compression_ratio = original_tokens / compressed_tokens if compressed_tokens > 0 else 1.0
+                print(f"pak_core: {file_path.name} ({original_tokens} → {compressed_tokens} tokens, {compression_ratio:.1f}x, {method_desc})", file=sys.stderr)
+
             # Check budget constraint
             if current_budget_remaining is not None and compressed_tokens > current_budget_remaining:
                 if not self.config.quiet:
-                    print(f"pak_core: Skipping {file_path} ({compressed_tokens} tokens) due to budget (rem: {current_budget_remaining}). Method: {method_desc}", file=sys.stderr)
+                    print(f"pak_core: Skipping {file_path} ({compressed_tokens} tokens) due to budget (rem: {current_budget_remaining})", file=sys.stderr)
                 return None
 
             return FileEntry(
@@ -1414,39 +1416,190 @@ def list_archive_contents(archive_path: str, pattern: str = "") -> bool:
 
     return True
 
+def list_archive_contents_detailed(archive_path: str, pattern: str = "") -> bool:
+    """NEW: Enhanced listing with content preview (first 200 chars of compressed content)"""
+    archive_file = Path(archive_path)
+
+    if not archive_file.is_file():
+        print(f"Error: Archive file not found: {archive_path}", file=sys.stderr)
+        return False
+
+    full_content = archive_file.read_text(encoding='utf-8', errors='ignore')
+    lines = full_content.splitlines()
+
+    archive_uuid = _get_archive_uuid_from_lines(lines)
+    if not archive_uuid:
+        print("Error: Invalid pak archive format (missing __PAK_UUID__ or __PAK_ID__ header).", file=sys.stderr)
+        return False
+
+    regex_f = RegexFilter(pattern)
+    if pattern and not regex_f.is_valid:
+        print(f"Error: Invalid regex pattern '{pattern}'. Listing aborted.", file=sys.stderr)
+        return False
+
+    is_quiet = os.environ.get("PAK_CORE_QUIET_MODE", "false").lower() == "true"
+    if not is_quiet:
+        print(f"Archive (Detailed): {archive_path} (UUID: {archive_uuid})")
+        if pattern:
+            print(f"Filter: {regex_f.pattern_str}")
+        print()
+
+    meta: Dict[str, Optional[str]] = {'path': None, 'size': None, 'imp': None, 'tok_c': None, 'meth': None}
+    in_file_meta_section = False
+    in_data_section = False
+    content_buffer: List[str] = []
+    listed_c = 0
+    total_in_archive = 0
+
+    file_start_m = f"__PAK_FILE_{archive_uuid}_START__"
+    data_start_m = f"__PAK_DATA_{archive_uuid}_START__"
+    data_end_m = f"__PAK_DATA_{archive_uuid}_END__"
+
+    for line_text in lines:
+        if line_text == file_start_m:
+            meta = {k: None for k in meta}
+            in_file_meta_section = True
+            in_data_section = False
+            content_buffer = []
+            total_in_archive += 1
+        elif in_file_meta_section:
+            if line_text.startswith("Path: "):
+                meta['path'] = line_text[len("Path: "):].strip()
+            elif line_text.startswith("Size: "):
+                meta['size'] = line_text[len("Size: "):].strip()
+            elif line_text.startswith("Importance: "):
+                meta['imp'] = line_text[len("Importance: "):].strip()
+            elif line_text.startswith("Compressed Tokens: "):
+                meta['tok_c'] = line_text[len("Compressed Tokens: "):].strip()
+            elif line_text.startswith("Compression Method: "):
+                meta['meth'] = line_text[len("Compression Method: "):].strip()
+            elif line_text.startswith("Method: "):
+                meta['meth'] = line_text[len("Method: "):].strip()
+            elif line_text == data_start_m:
+                in_file_meta_section = False
+                in_data_section = True
+                content_buffer = []
+        elif in_data_section:
+            if line_text == data_end_m:
+                in_data_section = False
+                if meta['path'] and regex_f.matches(meta['path']):
+                    if not is_quiet:
+                        # Display metadata
+                        print(f"📁 Path: {meta['path']}")
+                        print(f"   Size: {meta['size']} bytes | Tokens: {meta['tok_c']} | Importance: {meta['imp']} | Method: {meta['meth']}")
+
+                        # Display content preview (first 200 chars)
+                        content_preview = '\n'.join(content_buffer)[:200]
+                        if len('\n'.join(content_buffer)) > 200:
+                            content_preview += "..."
+
+                        # Format preview with indentation
+                        preview_lines = content_preview.split('\n')
+                        print(f"   Preview:")
+                        for i, preview_line in enumerate(preview_lines[:5]):  # Max 5 lines preview
+                            print(f"     {preview_line}")
+                        if len(preview_lines) > 5:
+                            print("     ...")
+                        print()  # Empty line separator
+                    listed_c += 1
+            else:
+                content_buffer.append(line_text)
+
+    if not is_quiet:
+        print(f"{'='*60}")
+        if pattern:
+            print(f"Listed {listed_c} of {total_in_archive} files matching pattern.")
+        else:
+            print(f"Total files in archive: {total_in_archive}.")
+
+    return True
+
 def main():
-    parser = argparse.ArgumentParser(
-        description=f"pak_core v{VERSION} - Python backend for pak4 file archiving with semantic compression.",
-        formatter_class=argparse.RawTextHelpFormatter
-    )
+    """Enhanced main() with subcommand support and better default handling"""
 
-    parser.add_argument('targets', nargs='*', default=['.'],
-                        help='File(s) and/or director(y/ies) to archive. Default: current directory.')
+    # Check if first arg is a known subcommand
+    known_subcommands = {'list', 'list-detailed', 'extract', 'verify', 'pack'}
 
-    pack_opts = parser.add_argument_group('Packing Options')
-    pack_opts.add_argument('--compression-level', '-c', default='none',
-                           choices=['none', 'light', 'medium', 'aggressive', 'smart', 'semantic'],
-                           help='Compression strategy:\n'
-                                '  none: Raw content.\n'
-                                '  light: Basic whitespace/empty line removal.\n'
-                                '  medium: Light + basic comment removal.\n'
-                                '  aggressive: AST-based (if available) or advanced text-based structure extraction.\n'
-                                '  semantic: LLM-based semantic compression (requires OpenRouter API).\n'
-                                '  smart: Adaptive compression based on file importance & token budget.')
+    # Determine if we're using subcommand syntax or default pack
+    use_subcommands = len(sys.argv) > 1 and sys.argv[1] in known_subcommands
 
-    pack_opts.add_argument('--max-tokens', '-m', type=int, default=0,
-                           help='Approximate maximum total tokens for the archive (0 = unlimited).')
+    if use_subcommands:
+        # Use subcommand parser
+        parser = argparse.ArgumentParser(
+            description=f"pak_core v{VERSION} - Python backend for pak4 file archiving with semantic compression + full command support.",
+            formatter_class=argparse.RawTextHelpFormatter
+        )
 
-    pack_opts.add_argument('--ext', nargs='+', default=[],
-                           help='Include only files with these extensions (e.g., .py .md .txt). Dot is optional.')
+        subparsers = parser.add_subparsers(dest='command', help='Commands')
 
-    parser.add_argument('--quiet', '-q', action='store_true',
-                        help='Suppress non-error messages to stderr.')
+        # Pack subcommand
+        pack_parser = subparsers.add_parser('pack', help='Pack files into archive')
+        pack_parser.add_argument('targets', nargs='*', default=['.'],
+                                 help='File(s) and/or director(y/ies) to archive. Default: current directory.')
 
-    parser.add_argument('--version', action='version',
-                        version=f'%(prog)s {VERSION} (AST Support: {"Enabled" if AST_AVAILABLE else "Disabled"})')
+        pack_opts = pack_parser.add_argument_group('Packing Options')
+        pack_opts.add_argument('--compression-level', '-c', default='none',
+                               choices=['none', 'light', 'medium', 'aggressive', 'smart', 'semantic'],
+                               help='Compression strategy')
 
-    args = parser.parse_args()
+        pack_opts.add_argument('--max-tokens', '-m', type=int, default=0,
+                               help='Approximate maximum total tokens for the archive (0 = unlimited).')
+
+        pack_opts.add_argument('--ext', nargs='+', default=[],
+                               help='Include only files with these extensions (e.g., .py .md .txt). Dot is optional.')
+
+        pack_parser.add_argument('--quiet', '-q', action='store_true',
+                                 help='Suppress non-error messages to stderr.')
+
+        # List subcommand
+        list_parser = subparsers.add_parser('list', help='List archive contents')
+        list_parser.add_argument('archive', help='Archive file to list')
+        list_parser.add_argument('-p', '--pattern', default='', help='Filter files matching regex pattern')
+
+        # List detailed subcommand
+        listd_parser = subparsers.add_parser('list-detailed', help='List archive contents with content preview')
+        listd_parser.add_argument('archive', help='Archive file to list')
+        listd_parser.add_argument('-p', '--pattern', default='', help='Filter files matching regex pattern')
+
+        # Extract subcommand
+        extract_parser = subparsers.add_parser('extract', help='Extract archive contents')
+        extract_parser.add_argument('archive', help='Archive file to extract')
+        extract_parser.add_argument('-d', '--outdir', default='.', help='Output directory (default: current)')
+        extract_parser.add_argument('-p', '--pattern', default='', help='Filter files matching regex pattern')
+
+        # Verify subcommand
+        verify_parser = subparsers.add_parser('verify', help='Verify archive integrity')
+        verify_parser.add_argument('archive', help='Archive file to verify')
+
+        args = parser.parse_args()
+    else:
+        # Use simple parser for default pack behavior (backward compatibility)
+        parser = argparse.ArgumentParser(
+            description=f"pak_core v{VERSION} - Python backend for pak4 file archiving",
+            formatter_class=argparse.RawTextHelpFormatter
+        )
+
+        parser.add_argument('targets', nargs='*', default=['.'],
+                            help='File(s) and/or director(y/ies) to archive. Default: current directory.')
+
+        parser.add_argument('--compression-level', '-c', default='none',
+                            choices=['none', 'light', 'medium', 'aggressive', 'smart', 'semantic'],
+                            help='Compression strategy')
+
+        parser.add_argument('--max-tokens', '-m', type=int, default=0,
+                            help='Approximate maximum total tokens for the archive (0 = unlimited).')
+
+        parser.add_argument('--ext', nargs='+', default=[],
+                            help='Include only files with these extensions.')
+
+        parser.add_argument('--quiet', '-q', action='store_true',
+                            help='Suppress non-error messages to stderr.')
+
+        parser.add_argument('--version', action='version',
+                            version=f'%(prog)s {VERSION} (AST Support: {"Enabled" if AST_AVAILABLE else "Disabled"})')
+
+        args = parser.parse_args()
+        args.command = None  # Mark as default pack
 
     # Set quiet mode environment variable
     if args.quiet:
@@ -1454,29 +1607,56 @@ def main():
     else:
         os.environ.pop("PAK_CORE_QUIET_MODE", None)
 
-    # Normalize extensions
-    normalized_extensions = []
-    if args.ext:
-        for ext_arg in args.ext:
-            normalized_extensions.append(ext_arg if ext_arg.startswith('.') else '.' + ext_arg)
+    # Route to appropriate function based on command
+    if args.command == 'list':
+        return list_archive_contents(args.archive, args.pattern)
+    elif args.command == 'list-detailed':
+        return list_archive_contents_detailed(args.archive, args.pattern)
+    elif args.command == 'extract':
+        return extract_archive(args.archive, args.outdir, args.pattern)
+    elif args.command == 'verify':
+        # Simple verify (basic format check)
+        archive_file = Path(args.archive)
+        if not archive_file.is_file():
+            print(f"Error: Archive file not found: {args.archive}", file=sys.stderr)
+            return False
 
-    # Create archiver configuration
-    archiver_config = ArchiveConfig(
-        compression_level=args.compression_level,
-        max_tokens=args.max_tokens,
-        include_extensions=normalized_extensions,
-        targets=[Path(t) for t in args.targets],
-        quiet=args.quiet
-    )
+        with open(args.archive, 'r') as f:
+            first_line = f.readline().strip()
 
-    # Create and run archiver
-    archiver_instance = SmartArchiver(archiver_config)
-    generated_archive_content = archiver_instance.create_archive()
-
-    if generated_archive_content:
-        print(generated_archive_content, end='')
+        if first_line.startswith('__PAK_UUID__:') or first_line.startswith('__PAK_ID__:'):
+            print(f"✓ Valid pak archive format: {args.archive}")
+            return True
+        else:
+            print(f"✗ Invalid pak archive format: {args.archive}")
+            return False
     else:
-        sys.exit(1)
+        # Default to pack command
+        # Normalize extensions
+        normalized_extensions = []
+        if hasattr(args, 'ext') and args.ext:
+            for ext_arg in args.ext:
+                normalized_extensions.append(ext_arg if ext_arg.startswith('.') else '.' + ext_arg)
+
+        # Create archiver configuration
+        archiver_config = ArchiveConfig(
+            compression_level=args.compression_level,
+            max_tokens=args.max_tokens,
+            include_extensions=normalized_extensions,
+            targets=[Path(t) for t in args.targets],
+            quiet=args.quiet
+        )
+
+        # Create and run archiver
+        archiver_instance = SmartArchiver(archiver_config)
+        generated_archive_content = archiver_instance.create_archive()
+
+        if generated_archive_content:
+            print(generated_archive_content, end='')
+            return True
+        else:
+            return False
 
 if __name__ == '__main__':
-    main()
+    success = main()
+    sys.exit(0 if success else 1)
