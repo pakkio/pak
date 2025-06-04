@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "pak4"
+version = "0.1.0"
+description = "Semantic compression"
+authors = ["pakkio <claudio.pacchiega@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+requests = "^2.32.3"
+python-dotenv = "^1.1.0"
+black = "^25.1.0"
+tree-sitter = "^0.24.0"
+tree-sitter-languages = "^1.10.2"
+tree-sitter-python = "^0.23.6"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,176 @@
+#!/bin/bash
+# pak4 v4.0.0 - Enhanced pak3 with LLM semantic compression
+# Extends pak3 with -c4/semantic compression level using LLM
+# Usage: pak4 [dirs/files] [options]
+# Example: pak4 . -t py,js -c4 -m 5000 -o project_semantic.pak
+
+VERSION="4.0.0"
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+PAK_CORE_PY="$SCRIPT_DIR/pak_core.py"
+SEMANTIC_COMPRESSOR_PY="$SCRIPT_DIR/semantic_compressor.py"
+LLM_WRAPPER_PY="$SCRIPT_DIR/llm_wrapper.py"
+
+# Check dependencies
+check_dependencies() {
+  local missing_deps=()
+
+  if [ ! -f "$PAK_CORE_PY" ]; then
+    missing_deps+=("pak_core.py")
+  fi
+
+  if [ ! -f "$SEMANTIC_COMPRESSOR_PY" ]; then
+    missing_deps+=("semantic_compressor.py")
+  fi
+
+  if [ ! -f "$LLM_WRAPPER_PY" ]; then
+    missing_deps+=("llm_wrapper.py")
+  fi
+
+  if [ ${#missing_deps[@]} -gt 0 ]; then
+    echo "pak4: Missing dependencies: ${missing_deps[*]}" >&2
+    echo "pak4: Please ensure all required files are in the same directory." >&2
+    exit 1
+  fi
+
+  # Check for .env file
+  if [ ! -f ".env" ] && [ ! -f "$SCRIPT_DIR/.env" ]; then
+    echo "pak4: Warning: No .env file found. Please copy .env.sample to .env and configure." >&2
+    echo "pak4: Semantic compression (level 4) requires OPENROUTER_API_KEY." >&2
+  fi
+
+  # Check Python dependencies
+  if ! python3 -c "import requests, dotenv" 2>/dev/null; then
+    echo "pak4: Missing Python dependencies. Install with:" >&2
+    echo "pak4: pip install requests python-dotenv" >&2
+    exit 1
+  fi
+}
+
+# Load environment variables
+load_env() {
+  if [ -f ".env" ]; then
+    set -a
+    source .env
+    set +a
+  elif [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+  fi
+}
+
+# Enhanced parse_compression to handle level 4/semantic
+parse_compression() {
+  case "$1" in
+    0|none) echo "none" ;;
+    1|light) echo "light" ;;
+    2|medium) echo "medium" ;;
+    3|aggressive) echo "aggressive" ;;
+    4|semantic) echo "semantic" ;;
+    s|S|smart) echo "smart" ;;
+    *) echo "Error: Invalid compression level '$1'. Use 0-4, s, or full names (semantic)." >&2; exit 1 ;;
+  esac
+}
+
+# Test LLM connection for semantic compression
+test_llm_connection() {
+  if ! python3 -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR')
+from llm_wrapper import test_llm_connection
+exit(0 if test_llm_connection() else 1)
+" 2>/dev/null; then
+    echo "pak4: Warning: LLM connection test failed. Semantic compression may not work." >&2
+    echo "pak4: Please check your .env configuration and OPENROUTER_API_KEY." >&2
+    return 1
+  fi
+  return 0
+}
+
+# Main execution
+main() {
+  # Initialize
+  check_dependencies
+  load_env
+
+  # Process arguments to handle pak4-specific compression levels
+  local args=()
+  local skip_next=false
+
+  for arg in "$@"; do
+    if [ "$skip_next" = true ]; then
+      skip_next=false
+      # Convert compression level if needed
+      case "$arg" in
+        4) args+=("semantic") ;;
+        semantic) args+=("semantic") ;;
+        *) args+=("$arg") ;;
+      esac
+      continue
+    fi
+
+    case "$arg" in
+      -c4)
+        args+=("-c" "semantic")
+        ;;
+      -csemantic)
+        args+=("-c" "semantic")
+        ;;
+      -c|--compression)
+        args+=("$arg")
+        skip_next=true
+        ;;
+      *)
+        args+=("$arg")
+        ;;
+    esac
+  done
+
+  local has_semantic=false
+
+  # Check if semantic compression is requested
+  for arg in "${args[@]}"; do
+    case "$arg" in
+      semantic) has_semantic=true ;;
+    esac
+  done
+
+  # Test LLM if semantic compression requested
+  if [ "$has_semantic" = true ]; then
+    if [ "$PAK_DEBUG" = "true" ]; then
+      echo "pak4: Testing LLM connection for semantic compression..." >&2
+    fi
+    test_llm_connection || {
+      echo "pak4: Semantic compression requested but LLM unavailable. Falling back to aggressive." >&2
+      # Replace -c4 with -c3 in args
+      local new_args=()
+      local skip_next=false
+      for i in "${!args[@]}"; do
+        if [ "$skip_next" = true ]; then
+          skip_next=false
+          new_args+=("aggressive")
+          continue
+        fi
+        case "${args[i]}" in
+          -c4) new_args+=("-c3") ;;
+          -csemantic) new_args+=("-caggressive") ;;
+          -c|--compression)
+            new_args+=("${args[i]}")
+            skip_next=true
+            ;;
+          *) new_args+=("${args[i]}") ;;
+        esac
+      done
+      args=("${new_args[@]}")
+    }
+  fi
+
+  # Export semantic compressor path for pak_core.py to use
+  export SEMANTIC_COMPRESSOR_PATH="$SEMANTIC_COMPRESSOR_PY"
+
+  # Call enhanced pak_core.py with modified arguments
+  python3 "$PAK_CORE_PY" "${args[@]}"
+}
+
+# Run main with all arguments
+main "$@"
