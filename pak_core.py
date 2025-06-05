@@ -910,6 +910,7 @@ class SmartArchiver:
         '*.pak', '*.zip', '*.tar', '*.gz', '*.bz2', '*.rar', '*.7z', '*.jar', '*.war', '*.ear',
         '*.exe', '*.dll', '*.so', '*.dylib', '*.o', '*.obj', '*.a', '*.lib',
         'vendor/**', 'vendors/**', 'third_party/**', 'external/**',
+
     }
 
     BINARY_EXTENSIONS = {
@@ -976,10 +977,6 @@ class SmartArchiver:
         return self._generate_archive_output_string(processed_entries)
 
     def _collect_files(self) -> List[Path]:
-        # DEBUG TEMPORANEO
-        if not self.config.quiet:
-            print(f"pak_core DEBUG: config.targets = {[str(t) for t in self.config.targets]}", file=sys.stderr)
-            print(f"pak_core DEBUG: config.include_extensions = {self.config.include_extensions}", file=sys.stderr)
 
         collected_paths: Set[Path] = set()
 
@@ -987,9 +984,6 @@ class SmartArchiver:
         base_paths_for_relativization: List[Path] = []
         for target_str in self.config.targets:
             target_p = Path(target_str)
-            # DEBUG
-            if not self.config.quiet:
-                print(f"pak_core DEBUG: Processing target '{target_str}', is_file={target_p.is_file()}, is_dir={target_p.is_dir()}", file=sys.stderr)
 
             if target_p.is_file():
                 base_paths_for_relativization.append(target_p.resolve().parent)
