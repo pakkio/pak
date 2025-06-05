@@ -3,6 +3,7 @@ pak_core.py - Python business logic for pak4
 Enhanced pak3 core with LLM semantic compression support + full command support
 Consolidates AST analysis, smart compression, semantic LLM compression, listing, and extraction
 MODIFIED: Added subcommand support, detailed listing, and enhanced logging
+FIXED: Tree-sitter API compatibility - query.captures() now returns dict format
 """
 import sys
 import os
@@ -30,7 +31,7 @@ except ImportError:
     Language = Any # type: ignore
     Parser = Any # type: ignore
 
-VERSION = "4.0.1-full-command-support"
+VERSION = "4.0.1-full-command-support-FIXED"
 
 @dataclass
 class FileEntry:
@@ -386,39 +387,45 @@ class ASTCompression(CompressionStrategy):
 
         return first_line.strip()
 
-    def _query_ast(self, tree: Node, lang_obj: Language, query_string: str) -> List[Tuple[Node, str]]:
+    def _query_ast(self, tree: Node, lang_obj: Language, query_string: str) -> Dict[str, List[Node]]:
+        """FIXED: Returns dict format from modern tree-sitter API"""
         try:
             query = lang_obj.query(query_string)
             return query.captures(tree.root_node) # type: ignore
         except Exception:
-            return []
+            return {}  # Return empty dict instead of empty list
 
     def _extract_python_ast(self, tree: Node, source_bytes: bytes) -> str:
         lang_py = self._get_language('python')
         if not lang_py:
             return "# Python AST language not available"
 
+        # FIXED: Simplified query syntax - no nested captures
         query_str = """
         (import_statement) @import
         (import_from_statement) @import_from
-        (function_definition name: (identifier) @name) @function
-        (class_definition name: (identifier) @name) @class
-        (assignment left: (identifier) @name value: (_)) @constant
+        (function_definition) @function
+        (class_definition) @class
+        (assignment) @assignment
         """
 
         captures = self._query_ast(tree, lang_py, query_str)
         elements = []
 
-        for node, name_tag in captures:
-            if name_tag in ["import", "import_from"]:
-                elements.append(self._node_text(node, source_bytes).strip())
-            elif name_tag in ["function", "class"]:
-                header = self._extract_definition_header(node, source_bytes, 'python')
-                elements.append(f"{header} ...")
-            elif name_tag == "constant":
-                var_name_node = node.child_by_field_name('left') # type: ignore
-                if var_name_node and re.fullmatch(r'[A-Z_][A-Z0-9_]*', self._node_text(var_name_node, source_bytes)):
+        # FIXED: Iterate over dict format instead of tuple list
+        for capture_name, nodes in captures.items():
+            for node in nodes:
+                if capture_name in ["import", "import_from"]:
                     elements.append(self._node_text(node, source_bytes).strip())
+                elif capture_name in ["function", "class"]:
+                    header = self._extract_definition_header(node, source_bytes, 'python')
+                    elements.append(f"{header} ...")
+                elif capture_name == "assignment":
+                    # Check if it's a constant (uppercase name)
+                    assignment_text = self._node_text(node, source_bytes).strip()
+                    # Look for assignments that start with uppercase identifier
+                    if re.match(r'^[A-Z_][A-Z0-9_]*\s*=', assignment_text):
+                        elements.append(assignment_text)
 
         return "\n".join(elements) if elements else "# No Python structure (AST)"
 
@@ -427,36 +434,39 @@ class ASTCompression(CompressionStrategy):
         if not lang_obj:
             return f"# {language} AST language not available"
 
+        # FIXED: Simplified query syntax
         query_str = """
         (import_statement) @import
         (export_statement) @export
-        (lexical_declaration (variable_declarator name: (identifier) value: [(arrow_function) (function)])) @func_const_let
-        (function_declaration name: (identifier)) @function
-        (method_definition name: (property_identifier)) @method
-        (class_declaration name: (type_identifier)) @class
-        (interface_declaration name: (type_identifier)) @interface
-        (type_alias_declaration name: (type_identifier)) @type_alias
+        (lexical_declaration) @variable_declaration
+        (function_declaration) @function
+        (method_definition) @method
+        (class_declaration) @class
+        (interface_declaration) @interface
+        (type_alias_declaration) @type_alias
         """
 
         captures = self._query_ast(tree, lang_obj, query_str)
         elements = []
         processed_node_ids = set()
 
-        for node, name_tag in captures:
-            if node.id in processed_node_ids:
-                continue
-            processed_node_ids.add(node.id)
+        # FIXED: Iterate over dict format
+        for capture_name, nodes in captures.items():
+            for node in nodes:
+                if node.id in processed_node_ids:
+                    continue
+                processed_node_ids.add(node.id)
 
-            if name_tag in ["import", "export"]:
-                elements.append(self._node_text(node, source_bytes).strip().split(';')[0])
-            elif name_tag in ["func_const_let", "function", "method", "class", "interface", "type_alias"]:
-                header = self._extract_definition_header(node, source_bytes, language)
-                if header.endswith('{'):
-                    elements.append(header + " ... }")
-                elif header.endswith(';'):
-                    elements.append(header)
-                else:
-                    elements.append(f"{header} {{ ... }}")
+                if capture_name in ["import", "export"]:
+                    elements.append(self._node_text(node, source_bytes).strip().split(';')[0])
+                elif capture_name in ["variable_declaration", "function", "method", "class", "interface", "type_alias"]:
+                    header = self._extract_definition_header(node, source_bytes, language)
+                    if header.endswith('{'):
+                        elements.append(header + " ... }")
+                    elif header.endswith(';'):
+                        elements.append(header)
+                    else:
+                        elements.append(f"{header} {{ ... }}")
 
         return "\n".join(elements) if elements else f"# No {language} structure (AST)"
 
@@ -481,13 +491,15 @@ class ASTCompression(CompressionStrategy):
             captures = self._query_ast(tree, lang_obj, "\n".join(query_str_parts))
             processed_node_ids = set()
 
-            for node, _ in captures:
-                if node.id in processed_node_ids:
-                    continue
-                processed_node_ids.add(node.id)
+            # FIXED: Iterate over dict format
+            for capture_name, nodes in captures.items():
+                for node in nodes:
+                    if node.id in processed_node_ids:
+                        continue
+                    processed_node_ids.add(node.id)
 
-                header = self._extract_definition_header(node, source_bytes, language)
-                elements.append(header + " ...")
+                    header = self._extract_definition_header(node, source_bytes, language)
+                    elements.append(header + " ...")
 
         # Fallback: basic tree traversal
         if not elements:
