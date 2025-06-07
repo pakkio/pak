@@ -3,10 +3,11 @@
 # Extends pak3 with -c4/semantic compression level using LLM
 # Supports all pak3 commands: pack, list (-l), list-detailed (-ll), extract (-x), verify (-v)
 # MODIFIED: Added glob pattern expansion for targets
+# FIXED: Added --output parameter passing to enable semantic caching
 # Usage: pak4 [dirs/files] [options]
 # Example: pak4 . -t py,js -c4 -m 5000 -o project_semantic.pak
 
-VERSION="4.0.1-glob"
+VERSION="4.0.1-glob-fixed"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 PAK_CORE_PY="$SCRIPT_DIR/pak_core.py"
 SEMANTIC_COMPRESSOR_PY="$SCRIPT_DIR/semantic_compressor.py"
@@ -27,7 +28,7 @@ ARCHIVE_FILE=""
 # Check dependencies
 check_dependencies() {
   local missing_deps=()
-
+  
   if [ ! -f "$PAK_CORE_PY" ]; then
     missing_deps+=("pak_core.py")
   fi
@@ -37,19 +38,19 @@ check_dependencies() {
   if [ ! -f "$LLM_WRAPPER_PY" ]; then
     missing_deps+=("llm_wrapper.py")
   fi
-
+  
   if [ ${#missing_deps[@]} -gt 0 ]; then
     echo "pak4: Missing dependencies: ${missing_deps[*]}" >&2
     echo "pak4: Please ensure all required files are in the same directory." >&2
     exit 1
   fi
-
+  
   # Check for .env file
   if [ ! -f ".env" ] && [ ! -f "$SCRIPT_DIR/.env" ]; then
     echo "pak4: Warning: No .env file found. Please copy .env.sample to .env and configure." >&2
     echo "pak4: Semantic compression (level 4) requires OPENROUTER_API_KEY." >&2
   fi
-
+  
   # Check Python dependencies for semantic compression
   if ! python3 -c "import requests, dotenv" 2>/dev/null; then
     echo "pak4: Warning: Missing Python dependencies for semantic compression." >&2
@@ -92,12 +93,12 @@ TARGETS:
 
 PACK OPTIONS:
   -t ext1,ext2         Extensions (py,md,js,ts,cpp,h,go,rs,java). Separated by comma or space.
-                       Example: -t py,md or -t "py md" or -tpy,md
+             Example: -t py,md or -t "py md" or -tpy,md
   -c LEVEL             Compression: 0=none, 1=light, 2=medium, 3=aggressive, 4=semantic, s=smart.
-                       Example: -c2 or -c4 or -csemantic
+             Example: -c2 or -c4 or -csemantic
   -m NUM               Max tokens (0=unlimited). Example: -m8000 or -m 8000
   -o FILE              Output file (default: stdout or auto-generated if stdout is a TTY).
-                       Example: -o project.pak or -oproject.pak
+             Example: -o project.pak or -oproject.pak
   -q                   Quiet mode.
 
 EXTRACT/LIST OPTIONS:
@@ -165,25 +166,25 @@ parse_compression() {
 parse_extensions() {
   local ext_string="$1"
   local -a exts
-
+  
   # Normalize: replace commas with spaces for consistent splitting
   local normalized_ext_string="${ext_string//,/ }"
-
+  
   # Read into array, splitting by spaces (IFS default)
   read -ra ADDR <<< "$normalized_ext_string"
   for ext_raw in "${ADDR[@]}"; do
     # Trim whitespace from each extension part
     local ext="${ext_raw#"${ext_raw%%[![:space:]]*}"}" # trim leading whitespace
     ext="${ext%"${ext##*[![:space:]]}"}"               # trim trailing whitespace
-
+    
     if [ -z "$ext" ]; then continue; fi # Skip empty strings
-
+    
     if [[ "$ext" != .* ]]; then
       ext=".$ext"
     fi
     exts+=("$ext")
   done
-
+  
   # Print each extension on a new line, to be read by readarray
   printf '%s\n' "${exts[@]}"
 }
@@ -192,20 +193,20 @@ parse_extensions() {
 expand_glob_targets() {
   local pattern="$1"
   local -a expanded=()
-
+  
   # CRITICAL: Disable pathname expansion during pattern check
   set -f
-
+  
   # Check if pattern contains glob characters
   if [[ "$pattern" == *"*"* ]] || [[ "$pattern" == *"?"* ]] || [[ "$pattern" == *"["* ]]; then
     # Re-enable pathname expansion for controlled expansion
     set +f
     shopt -s nullglob
     shopt -s globstar 2>/dev/null || true
-
+    
     # Use array expansion to handle spaces correctly
     local glob_results=($pattern)
-
+    
     # Check if glob actually matched anything
     if [ ${#glob_results[@]} -gt 0 ]; then
       for match in "${glob_results[@]}"; do
@@ -215,12 +216,12 @@ expand_glob_targets() {
         fi
       done
     fi
-
+    
     # Restore settings
     shopt -u nullglob
     shopt -u globstar 2>/dev/null || true
     set -f  # Disable again for safety
-
+    
     if [ ${#expanded[@]} -eq 0 ]; then
       if ! $QUIET; then
         echo "pak4: Warning: Glob pattern '$pattern' matched no files." >&2
@@ -240,14 +241,14 @@ expand_glob_targets() {
       return 1
     fi
   fi
-
+  
   set +f  # Re-enable pathname expansion
   printf '%s\n' "${expanded[@]}"
 }
 
 auto_output_name() {
   local base_name="archive"
-
+  
   if [ ${#TARGETS[@]} -eq 1 ] && [ -d "${TARGETS[0]}" ]; then
     base_name=$(basename "${TARGETS[0]}")
     if [ "$base_name" = "." ] || [ -z "$base_name" ]; then # Handle "." or empty basename if PWD is root
@@ -257,7 +258,7 @@ auto_output_name() {
     base_name=$(basename "${TARGETS[0]}")
     base_name="${base_name%.*}_collection" # If first target is a file or multiple targets
   fi
-
+  
   # Add compression suffix
   case "$COMPRESSION_LEVEL" in
     semantic) base_name="${base_name}_semantic" ;;
@@ -266,7 +267,7 @@ auto_output_name() {
     medium) base_name="${base_name}_med" ;;
     light) base_name="${base_name}_light" ;;
   esac
-
+  
   echo "${base_name}.pak"
 }
 
@@ -291,35 +292,40 @@ exit(0 if test_llm_connection() else 1)
 
 pack_files() {
   local python_args=()
-
+  
   # FIXED: Add targets FIRST to avoid argparse confusion
   if [ ${#TARGETS[@]} -gt 0 ]; then
     python_args+=("${TARGETS[@]}")
   fi # Else, pak_core.py defaults to ["."]
-
+  
   python_args+=("--compression-level" "$COMPRESSION_LEVEL")
-
+  
   if [ "$MAX_TOKENS" -gt 0 ]; then
     python_args+=("--max-tokens" "$MAX_TOKENS")
   fi
-
+  
   if [ ${#INCLUDE_EXTENSIONS[@]} -gt 0 ]; then
     python_args+=("--ext" "${INCLUDE_EXTENSIONS[@]}")
   fi
-
+  
   if $QUIET; then
     python_args+=("--quiet")
   fi
-
+  
+  # ✅ FIXED: Add output file parameter to enable caching
+  if [ -n "$OUTPUT_FILE" ]; then
+    python_args+=("--output" "$OUTPUT_FILE")
+  fi
+  
   if has_python_core; then
     if ! $QUIET; then echo "pak4: Using enhanced Python core for processing." >&2; fi
-
+    
     # DEBUG: Show what we're passing to Python
     if [ "$PAK_DEBUG" = "true" ]; then
       echo "pak4: DEBUG: python_args passed to pak_core:" >&2
       printf "pak4: DEBUG:   '%s'\n" "${python_args[@]}" >&2
     fi
-
+    
     # FIXED: Use proper argument passing instead of dynamic string construction
     # Use python -c with proper argument passing
     python3 -c "
@@ -341,27 +347,27 @@ call_python_core_command() {
   local archive_file_arg="$2"
   local output_dir_arg="$3" # Only for extract
   local pattern_arg="$4"
-
+  
   if ! has_python_core; then
     echo "pak4: Python core '$PAK_CORE_PY' not available or importable. Cannot execute '$COMMAND'." >&2
     exit 1
   fi
-
+  
   local escaped_archive_file_arg="${archive_file_arg//\'/\'\\\'\'}"
   local py_command="import sys; sys.path.insert(0, '$SCRIPT_DIR'); from pak_core import $py_func_name as cmd_func;"
   py_command+="cmd_func(archive_path='$escaped_archive_file_arg'"
-
+  
   if [ "$COMMAND" == "extract" ]; then
      local escaped_output_dir_arg="${output_dir_arg//\'/\'\\\'\'}"
      py_command+=", output_dir='$escaped_output_dir_arg'"
   fi
-
+  
   if [ -n "$pattern_arg" ]; then # Only add pattern if it's set
     # Escape single quotes within the pattern argument for the Python string
     local escaped_pattern_arg="${pattern_arg//\'/\'\\\'\'}"
     py_command+=", pattern='$escaped_pattern_arg'"
   fi
-
+  
   py_command+=")"
   python3 -c "$py_command"
 }
@@ -370,21 +376,21 @@ call_python_core_command() {
 call_detailed_list() {
   local archive_file_arg="$1"
   local pattern_arg="$2"
-
+  
   if ! has_python_core; then
     echo "pak4: Python core '$PAK_CORE_PY' not available. Cannot execute detailed list." >&2
     exit 1
   fi
-
+  
   local escaped_archive_file_arg="${archive_file_arg//\'/\'\\\'\'}"
   local py_command="import sys; sys.path.insert(0, '$SCRIPT_DIR'); from pak_core import list_archive_contents_detailed as cmd_func;"
   py_command+="cmd_func(archive_path='$escaped_archive_file_arg'"
-
+  
   if [ -n "$pattern_arg" ]; then
     local escaped_pattern_arg="${pattern_arg//\'/\'\\\'\'}"
     py_command+=", pattern='$escaped_pattern_arg'"
   fi
-
+  
   py_command+=")"
   python3 -c "$py_command"
 }
@@ -414,7 +420,7 @@ while [ $# -gt 0 ]; do
     -x|--extract) COMMAND="extract"; shift ;;
     -v|--verify) COMMAND="verify"; shift ;;
     -q|--quiet) QUIET=true; shift ;;
-
+    
     -c[0-9]|"-c"[4sS]) # Attached: -c0, -c1, -c2, -c3, -c4, -cs, -cS
       LEVEL_ARG="${current_arg#-c}"
       COMPRESSION_LEVEL=$(parse_compression "$LEVEL_ARG")
@@ -426,7 +432,7 @@ while [ $# -gt 0 ]; do
       COMPRESSION_LEVEL=$(parse_compression "$1")
       shift
       ;;
-
+      
     -t?*) # Attached: -tpy,md or -t.py
       TYPES_VAL="${current_arg#-t}"
       readarray -t INCLUDE_EXTENSIONS < <(parse_extensions "$TYPES_VAL")
@@ -438,7 +444,7 @@ while [ $# -gt 0 ]; do
       readarray -t INCLUDE_EXTENSIONS < <(parse_extensions "$1")
       shift
       ;;
-
+      
     -m[0-9]*) # Attached: -mNUM
       TOKEN_ARG="${current_arg#-m}"
       if ! [[ "$TOKEN_ARG" =~ ^[0-9]+$ ]]; then echo "Error: -m value must be a number. Got '$TOKEN_ARG' from '$current_arg'." >&2; usage; exit 1; fi
@@ -452,7 +458,7 @@ while [ $# -gt 0 ]; do
       MAX_TOKENS="$1"
       shift
       ;;
-
+      
     -o?*) # Attached: -ofile.pak
       OUTPUT_FILE="${current_arg#-o}"
       shift
@@ -463,7 +469,7 @@ while [ $# -gt 0 ]; do
       OUTPUT_FILE="$1"
       shift
       ;;
-
+      
     -d?*) # Attached: -d./out
       EXTRACT_DIR="${current_arg#-d}"
       shift
@@ -474,7 +480,7 @@ while [ $# -gt 0 ]; do
       EXTRACT_DIR="$1"
       shift
       ;;
-
+      
     -p?*) # Attached: -p"mypattern"
       EXTRACT_PATTERN="${current_arg#-p}"
       shift
@@ -487,13 +493,13 @@ while [ $# -gt 0 ]; do
       EXTRACT_PATTERN="$1"
       shift
       ;;
-
+      
     -*) # Catch-all for unknown options starting with -
       echo "Error: Unknown option: $current_arg" >&2
       usage >&2
       exit 1
       ;;
-
+      
     *) # Positional arguments (targets for pack, or archive_file for other commands)
       if [ "$COMMAND" == "pack" ]; then
         # Simply collect all targets without filtering here
@@ -522,7 +528,7 @@ if [ "$COMMAND" == "pack" ]; then
       COMPRESSION_LEVEL="aggressive"
     fi
   fi
-
+  
   # Export semantic compressor path for pak_core.py to use
   export SEMANTIC_COMPRESSOR_PATH="$SEMANTIC_COMPRESSOR_PY"
 fi
@@ -535,24 +541,24 @@ case "$COMMAND" in
       echo "pak4: No valid targets found. Using current directory as fallback." >&2
       TARGETS=(".")
     fi
-
+    
     # FIXED: Apply extension filtering AFTER all argument parsing is complete
     if [ ${#INCLUDE_EXTENSIONS[@]} -gt 0 ]; then
       if [ "$PAK_DEBUG" = "true" ]; then
         echo "pak4: DEBUG: Applying post-parse extension filter" >&2
       fi
-
+      
       filtered_targets=()
       for target in "${TARGETS[@]}"; do
         should_add_target=true
-
+        
         if [ -f "$target" ]; then
           # It's a file - check extension
           file_ext=""
           if [[ "$target" == *.* ]]; then
             file_ext=".${target##*.}"
           fi
-
+          
           should_add_target=false
           for req_ext in "${INCLUDE_EXTENSIONS[@]}"; do
             if [[ "$file_ext" == "$req_ext" ]]; then
@@ -560,7 +566,7 @@ case "$COMMAND" in
               break
             fi
           done
-
+          
           if ! $should_add_target && ! $QUIET; then
             echo "pak4: Filtering out '$target' (extension '$file_ext' not in: ${INCLUDE_EXTENSIONS[*]})" >&2
           fi
@@ -587,21 +593,21 @@ case "$COMMAND" in
             echo "pak4: Filtering out '$target' (not a file or directory)" >&2
           fi
         fi
-
+        
         if $should_add_target; then
           filtered_targets+=("$target")
         fi
       done
-
+      
       TARGETS=("${filtered_targets[@]}")
-
+      
       # Check if filtering left us with no targets
       if [ ${#TARGETS[@]} -eq 0 ]; then
         echo "pak4: Error: Extension filter removed all targets. No files match extensions: ${INCLUDE_EXTENSIONS[*]}" >&2
         exit 1
       fi
     fi
-
+    
     # Debug output for glob expansion
     if [ "$PAK_DEBUG" = "true" ]; then
       echo "pak4: DEBUG: Final TARGETS array:" >&2
@@ -610,12 +616,12 @@ case "$COMMAND" in
       printf "pak4: DEBUG:   '%s'\n" "${INCLUDE_EXTENSIONS[@]}" >&2
       echo "pak4: DEBUG: COMPRESSION_LEVEL: $COMPRESSION_LEVEL" >&2
     fi
-
+    
     if [ -z "$OUTPUT_FILE" ] && [ -t 1 ]; then # If stdout is a TTY and no -o
       OUTPUT_FILE=$(auto_output_name)
       if ! $QUIET; then echo "pak4: Auto-generated output file: $OUTPUT_FILE" >&2; fi
     fi
-
+    
     if [ -n "$OUTPUT_FILE" ]; then
       pack_files > "$OUTPUT_FILE"
       # pak_core.py might print its own completion message to stderr if not quiet
@@ -633,32 +639,32 @@ case "$COMMAND" in
       pack_files # Output to stdout
     fi
     ;;
-
+    
   list)
     if [ -z "$ARCHIVE_FILE" ]; then echo "Error: No archive file specified for listing." >&2; usage; exit 1; fi
     call_python_core_command "list_archive_contents" "$ARCHIVE_FILE" "" "$EXTRACT_PATTERN"
     ;;
-
+    
   list-detailed)
     if [ -z "$ARCHIVE_FILE" ]; then echo "Error: No archive file specified for detailed listing." >&2; usage; exit 1; fi
     call_detailed_list "$ARCHIVE_FILE" "$EXTRACT_PATTERN"
     ;;
-
+    
   extract)
     if [ -z "$ARCHIVE_FILE" ]; then echo "Error: No archive file specified for extraction." >&2; usage; exit 1; fi
     call_python_core_command "extract_archive" "$ARCHIVE_FILE" "$EXTRACT_DIR" "$EXTRACT_PATTERN"
     ;;
-
+    
   verify)
     if [ -z "$ARCHIVE_FILE" ]; then echo "Error: No archive file specified for verification." >&2; usage; exit 1; fi
     echo "Verifying: $ARCHIVE_FILE (basic check)" >&2
-
+    
     first_line=""
     if ! IFS= read -r first_line < "$ARCHIVE_FILE"; then
       echo "Error: Cannot read archive file $ARCHIVE_FILE for verification." >&2
       exit 1
     fi
-
+    
     if [[ "$first_line" == __PAK_UUID__:?* || "$first_line" == __PAK_ID__:?* ]]; then
       archive_id=""
       if [[ "$first_line" == __PAK_UUID__:?* ]]; then
@@ -666,23 +672,23 @@ case "$COMMAND" in
       else
         archive_id="${first_line#__PAK_ID__:}"
       fi
-
+      
       if [ -z "$archive_id" ]; then
          echo "✗ Invalid pak archive format: Empty UUID/ID in header." >&2
          exit 1
       fi
-
+      
       file_count=$(grep -c "__PAK_FILE_${archive_id}_START__" "$ARCHIVE_FILE")
       data_start_count=$(grep -c "__PAK_DATA_${archive_id}_START__" "$ARCHIVE_FILE")
       data_end_count=$(grep -c "__PAK_DATA_${archive_id}_END__" "$ARCHIVE_FILE")
-
+      
       # Ensure counts are treated as 0 if grep returns nothing or fails
       file_count=${file_count:-0}
       data_start_count=${data_start_count:-0}
       data_end_count=${data_end_count:-0}
-
+      
       echo "✓ Basic structure: ID/UUID: $archive_id, Files: $file_count, Data Blocks: $data_start_count (start), $data_end_count (end)"
-
+      
       if [ "$file_count" -eq "$data_start_count" ] && [ "$data_start_count" -eq "$data_end_count" ]; then
          echo "✓ Marker counts match."
       else
