@@ -1,13 +1,12 @@
 #!/bin/bash
-# pak4 v4.0.1 - Enhanced pak3 with LLM semantic compression + full command support + GLOB SUPPORT
-# Extends pak3 with -c4/semantic compression level using LLM
+# pak4 v4.1.0 - Enhanced pak3 with LLM semantic compression + method diff extraction
+# NEW: Added -d (extract method diff), -vd (verify method diff), -ad (apply method diff) commands
+# Extends pak3 with -c4/semantic compression level using LLM + method-level diffs
 # Supports all pak3 commands: pack, list (-l), list-detailed (-ll), extract (-x), verify (-v)
-# MODIFIED: Added glob pattern expansion for targets
-# FIXED: Added --output parameter passing to enable semantic caching
+# MODIFIED: Added glob pattern expansion for targets + method diff system
 # Usage: pak4 [dirs/files] [options]
 # Example: pak4 . -t py,js -c4 -m 5000 -o project_semantic.pak
-
-VERSION="4.0.1-glob-fixed"
+VERSION="4.1.0-method-diff"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 PAK_CORE_PY="$SCRIPT_DIR/pak_core.py"
 SEMANTIC_COMPRESSOR_PY="$SCRIPT_DIR/semantic_compressor.py"
@@ -25,6 +24,13 @@ EXTRACT_PATTERN=""
 EXTRACT_DIR="."
 ARCHIVE_FILE=""
 
+# NEW: Method diff specific variables
+DIFF_EXTRACT_MODE=false
+VERIFY_DIFF_MODE=false
+APPLY_DIFF_MODE=false
+DIFF_OUTPUT_FILE=""
+DIFF_INPUT_FILE=""
+
 # Check dependencies
 check_dependencies() {
   local missing_deps=()
@@ -32,9 +38,11 @@ check_dependencies() {
   if [ ! -f "$PAK_CORE_PY" ]; then
     missing_deps+=("pak_core.py")
   fi
+  
   if [ ! -f "$SEMANTIC_COMPRESSOR_PY" ]; then
     missing_deps+=("semantic_compressor.py")
   fi
+  
   if [ ! -f "$LLM_WRAPPER_PY" ]; then
     missing_deps+=("llm_wrapper.py")
   fi
@@ -74,80 +82,84 @@ load_env() {
 
 usage() {
   cat << EOF
-pak4 v$VERSION - LLM-enhanced file archiver with semantic compression + GLOB SUPPORT
-
+pak4 v$VERSION - LLM-enhanced file archiver with semantic compression + METHOD DIFF SUPPORT
 USAGE:
-  pak4 [targets] [options]                    # Pack (default)
-  pak4 -l archive.pak [-p regex]             # List contents (with optional pattern filter)
-  pak4 -ll archive.pak [-p regex]            # List with content preview
-  pak4 -x archive.pak [-d outdir] [-p regex] # Extract (with optional pattern filter)
-  pak4 -v archive.pak                        # Verify
+  pak4 [targets] [options]                     # Pack (default)
+  pak4 -l archive.pak [-p regex]              # List contents (with optional pattern filter)
+  pak4 -ll archive.pak [-p regex]             # List with content preview
+  pak4 -x archive.pak [-d outdir] [-p regex]  # Extract (with optional pattern filter)
+  pak4 -v archive.pak                         # Verify archive integrity
+  
+  NEW METHOD DIFF COMMANDS:
+  pak4 -d file1.py file2.py [...] -o changes.diff  # Extract method-level diff
+  pak4 -vd changes.diff                            # Verify method diff syntax  
+  pak4 -ad changes.diff target_dir/                # Apply method diff to files
 
 TARGETS:
   .                    Current directory
   src/ lib/            Specific directories
   main.py readme.md    Specific files
-  pak_core*            GLOB PATTERNS (NEW!)
+  pak_core*            GLOB PATTERNS
   *.py                 All Python files in current dir
   src/**/*.js          All JS files in src/ recursively (zsh/bash 4.0+)
 
 PACK OPTIONS:
   -t ext1,ext2         Extensions (py,md,js,ts,cpp,h,go,rs,java). Separated by comma or space.
-             Example: -t py,md or -t "py md" or -tpy,md
+       Example: -t py,md or -t "py md" or -tpy,md
   -c LEVEL             Compression: 0=none, 1=light, 2=medium, 3=aggressive, 4=semantic, s=smart.
-             Example: -c2 or -c4 or -csemantic
+       Example: -c2 or -c4 or -csemantic
   -m NUM               Max tokens (0=unlimited). Example: -m8000 or -m 8000
   -o FILE              Output file (default: stdout or auto-generated if stdout is a TTY).
-             Example: -o project.pak or -oproject.pak
+       Example: -o project.pak or -oproject.pak
   -q                   Quiet mode.
 
 EXTRACT/LIST OPTIONS:
   -p PATTERN           Filter files matching regex pattern (applied to full path).
   -d DIR               (Extract only) Extract to specific directory.
 
-GLOB PATTERN EXAMPLES:
-  pak4 pak_core* -t py                        # Files starting with "pak_core"
-  pak4 *.py -c2                               # All Python files in current dir
-  pak4 src/**/*.js -c3                        # All JS files in src/ (recursive)
-  pak4 "test_*.py" docs/*.md -c2              # Multiple patterns
+METHOD DIFF OPTIONS:
+  -d                   Extract method-level differences between files
+  -vd                  Verify method diff file syntax
+  -ad                  Apply method diff to target files
+  -o FILE              Output file for method diff extraction
 
-SEMANTIC COMPRESSION EXAMPLES:
+METHOD DIFF FORMAT:
+  FILE: path/to/file.py
+  FIND_METHOD: def method_name(self, args)
+  UNTIL_EXCLUDE: def next_method_name(self, args)
+  REPLACE_WITH:
+  def method_name(self, args):
+      # Modified implementation
+      return result
+  
+  # For new methods (append to end):
+  FIND_METHOD: 
+  UNTIL_EXCLUDE: 
+  REPLACE_WITH:
+  def new_method(self):
+      return "new functionality"
+  
+  # For deletions:
+  REPLACE_WITH:
+  # Method deleted
+
+EXAMPLES:
+  # Traditional pak4 usage
   pak4 . -t py,md -c4                         # Semantic compression, Python+Markdown
-  pak4 src/ -c4 -m 5000 -o semantic.pak      # Semantic mode, 5k token limit
-  pak4 . -cs -m 8000 -o smart.pak            # Smart mode with semantic fallback
-
-TRADITIONAL COMPRESSION EXAMPLES:
-  pak4 . -t py,md -c2                         # Medium compression (pak3 compatible)
-  pak4 src/ -c3 -m 8000 -o project.pak       # Aggressive mode, 8k token limit
-  pak4 . -t js,ts,css -c2 -q                 # Medium compression, frontend files, quiet
-
-EXTRACTION EXAMPLES:
-  pak4 -x project.pak                         # Extract all files
-  pak4 -x project.pak -d ./extracted         # Extract to specific dir
-  pak4 -x project.pak -p "test_.*"           # Extract only test files
-  pak4 -x project.pak -p ".*\\.py$"          # Extract only Python files
-
-LISTING EXAMPLES:
-  pak4 -l project.pak                         # List contents
-  pak4 -ll project.pak                        # List with content preview (first 200 chars)
-  pak4 -l project.pak -p ".*\\.py$"          # List only Python files
-
-OTHER:
-  pak4 -v project.pak                         # Verify integrity
-  pak4 -h                                     # This help
+  pak4 src/ -cs -m 8000 -o project.pak       # Smart mode, 8k token limit
+  
+  # Method diff workflow
+  pak4 -d original.py modified.py -o changes.diff
+  pak4 -vd changes.diff
+  pak4 -ad changes.diff target_project/
 
 COMPRESSION LEVELS:
   0/none      : Raw content
   1/light     : Basic whitespace/empty line removal
   2/medium    : Light + comment removal (pak3 compatible)
   3/aggressive: AST-based structure extraction
-  4/semantic  : LLM-based semantic compression (NEW!)
+  4/semantic  : LLM-based semantic compression
   s/smart     : Adaptive compression with semantic fallback
-
-REGEX PATTERN NOTES (for -p):
-  - Applied to the full file path (e.g., "src/utils/helper.py").
-  - Uses standard regex syntax. Case sensitive by default.
-  - Examples: "test_.*\\.py$" (test Python files), ".*/(config|setup).*" (config/setup files).
 EOF
 }
 
@@ -166,89 +178,26 @@ parse_compression() {
 parse_extensions() {
   local ext_string="$1"
   local -a exts
-  
   # Normalize: replace commas with spaces for consistent splitting
   local normalized_ext_string="${ext_string//,/ }"
-  
   # Read into array, splitting by spaces (IFS default)
   read -ra ADDR <<< "$normalized_ext_string"
   for ext_raw in "${ADDR[@]}"; do
     # Trim whitespace from each extension part
     local ext="${ext_raw#"${ext_raw%%[![:space:]]*}"}" # trim leading whitespace
     ext="${ext%"${ext##*[![:space:]]}"}"               # trim trailing whitespace
-    
     if [ -z "$ext" ]; then continue; fi # Skip empty strings
-    
     if [[ "$ext" != .* ]]; then
       ext=".$ext"
     fi
     exts+=("$ext")
   done
-  
   # Print each extension on a new line, to be read by readarray
   printf '%s\n' "${exts[@]}"
 }
 
-# MODIFIED: Expand glob patterns for targets (FIXED to filter files only)
-expand_glob_targets() {
-  local pattern="$1"
-  local -a expanded=()
-  
-  # CRITICAL: Disable pathname expansion during pattern check
-  set -f
-  
-  # Check if pattern contains glob characters
-  if [[ "$pattern" == *"*"* ]] || [[ "$pattern" == *"?"* ]] || [[ "$pattern" == *"["* ]]; then
-    # Re-enable pathname expansion for controlled expansion
-    set +f
-    shopt -s nullglob
-    shopt -s globstar 2>/dev/null || true
-    
-    # Use array expansion to handle spaces correctly
-    local glob_results=($pattern)
-    
-    # Check if glob actually matched anything
-    if [ ${#glob_results[@]} -gt 0 ]; then
-      for match in "${glob_results[@]}"; do
-        # FIXED: For glob patterns, only include FILES, not directories
-        if [ -f "$match" ]; then
-          expanded+=("$match")
-        fi
-      done
-    fi
-    
-    # Restore settings
-    shopt -u nullglob
-    shopt -u globstar 2>/dev/null || true
-    set -f  # Disable again for safety
-    
-    if [ ${#expanded[@]} -eq 0 ]; then
-      if ! $QUIET; then
-        echo "pak4: Warning: Glob pattern '$pattern' matched no files." >&2
-      fi
-      set +f  # Re-enable before returning
-      return 1
-    fi
-  else
-    # Not a glob pattern - accept files and directories as-is
-    if [ -e "$pattern" ]; then
-      expanded+=("$pattern")
-    else
-      if ! $QUIET; then
-        echo "pak4: Warning: Target '$pattern' not found." >&2
-      fi
-      set +f
-      return 1
-    fi
-  fi
-  
-  set +f  # Re-enable pathname expansion
-  printf '%s\n' "${expanded[@]}"
-}
-
 auto_output_name() {
   local base_name="archive"
-  
   if [ ${#TARGETS[@]} -eq 1 ] && [ -d "${TARGETS[0]}" ]; then
     base_name=$(basename "${TARGETS[0]}")
     if [ "$base_name" = "." ] || [ -z "$base_name" ]; then # Handle "." or empty basename if PWD is root
@@ -341,6 +290,79 @@ pak_main()
   fi
 }
 
+# NEW: Method diff functions
+extract_method_diff() {
+  if ! has_python_core; then
+    echo "pak4: Python core '$PAK_CORE_PY' not available. Cannot extract method diff." >&2
+    exit 1
+  fi
+  
+  local python_args=("extract-diff")
+  python_args+=("${TARGETS[@]}")
+  
+  if [ -n "$DIFF_OUTPUT_FILE" ]; then
+    python_args+=("--output" "$DIFF_OUTPUT_FILE")
+  fi
+  
+  if $QUIET; then
+    python_args+=("--quiet")
+  fi
+  
+  python3 -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR')
+sys.argv = ['pak_core'] + sys.argv[1:]
+from pak_core import main as pak_main
+pak_main()
+" "${python_args[@]}"
+}
+
+verify_method_diff() {
+  if ! has_python_core; then
+    echo "pak4: Python core '$PAK_CORE_PY' not available. Cannot verify method diff." >&2
+    exit 1
+  fi
+  
+  local python_args=("verify-diff" "$DIFF_INPUT_FILE")
+  
+  if $QUIET; then
+    python_args+=("--quiet")
+  fi
+  
+  python3 -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR')
+sys.argv = ['pak_core'] + sys.argv[1:]
+from pak_core import main as pak_main
+pak_main()
+" "${python_args[@]}"
+}
+
+apply_method_diff() {
+  if ! has_python_core; then
+    echo "pak4: Python core '$PAK_CORE_PY' not available. Cannot apply method diff." >&2
+    exit 1
+  fi
+  
+  local python_args=("apply-diff" "$DIFF_INPUT_FILE")
+  
+  if [ ${#TARGETS[@]} -gt 0 ]; then
+    python_args+=("--target" "${TARGETS[0]}")  # First target is the target directory
+  fi
+  
+  if $QUIET; then
+    python_args+=("--quiet")
+  fi
+  
+  python3 -c "
+import sys
+sys.path.insert(0, '$SCRIPT_DIR')
+sys.argv = ['pak_core'] + sys.argv[1:]
+from pak_core import main as pak_main
+pak_main()
+" "${python_args[@]}"
+}
+
 # List/Extract/Verify functions that call Python core
 call_python_core_command() {
   local py_func_name="$1"
@@ -369,6 +391,7 @@ call_python_core_command() {
   fi
   
   py_command+=")"
+  
   python3 -c "$py_command"
 }
 
@@ -392,6 +415,7 @@ call_detailed_list() {
   fi
   
   py_command+=")"
+  
   python3 -c "$py_command"
 }
 
@@ -399,7 +423,7 @@ call_detailed_list() {
 check_dependencies
 load_env
 
-# Determine command first (list, extract, verify, or pack by default)
+# Determine command first (list, extract, verify, diff commands, or pack by default)
 TEMP_ARGS=("$@")
 for arg in "${TEMP_ARGS[@]}"; do
   case "$arg" in
@@ -407,6 +431,9 @@ for arg in "${TEMP_ARGS[@]}"; do
     -ll|--list-detailed) COMMAND="list-detailed" ;;
     -x|--extract) COMMAND="extract" ;;
     -v|--verify) COMMAND="verify" ;;
+    -d) DIFF_EXTRACT_MODE=true ;;
+    -vd) VERIFY_DIFF_MODE=true ;;
+    -ad) APPLY_DIFF_MODE=true ;;
   esac
 done
 
@@ -418,7 +445,26 @@ while [ $# -gt 0 ]; do
     -l|--list) COMMAND="list"; shift ;;
     -ll|--list-detailed) COMMAND="list-detailed"; shift ;;
     -x|--extract) COMMAND="extract"; shift ;;
-    -v|--verify) COMMAND="verify"; shift ;;
+    -v|--verify) 
+      if ! $VERIFY_DIFF_MODE; then
+        COMMAND="verify"
+      fi
+      shift ;;
+    
+    # NEW: Method diff commands
+    -d) 
+      DIFF_EXTRACT_MODE=true
+      COMMAND="extract-diff"
+      shift ;;
+    -vd) 
+      VERIFY_DIFF_MODE=true
+      COMMAND="verify-diff"
+      shift ;;
+    -ad) 
+      APPLY_DIFF_MODE=true
+      COMMAND="apply-diff"
+      shift ;;
+    
     -q|--quiet) QUIET=true; shift ;;
     
     -c[0-9]|"-c"[4sS]) # Attached: -c0, -c1, -c2, -c3, -c4, -cs, -cS
@@ -460,25 +506,38 @@ while [ $# -gt 0 ]; do
       ;;
       
     -o?*) # Attached: -ofile.pak
-      OUTPUT_FILE="${current_arg#-o}"
+      OUTPUT_ARG="${current_arg#-o}"
+      if $DIFF_EXTRACT_MODE; then
+        DIFF_OUTPUT_FILE="$OUTPUT_ARG"
+      else
+        OUTPUT_FILE="$OUTPUT_ARG"
+      fi
       shift
       ;;
     -o|--output) # Separated: -o file.pak
       shift
       if [ $# -eq 0 ] || [[ "$1" == -* ]]; then echo "Error: -o requires filename value." >&2; usage; exit 1; fi
-      OUTPUT_FILE="$1"
+      if $DIFF_EXTRACT_MODE; then
+        DIFF_OUTPUT_FILE="$1"
+      else
+        OUTPUT_FILE="$1"
+      fi
       shift
       ;;
       
-    -d?*) # Attached: -d./out
-      EXTRACT_DIR="${current_arg#-d}"
+    -d?*) # Attached: -d./out (only for regular extract, not diff extract)
+      if ! $DIFF_EXTRACT_MODE; then
+        EXTRACT_DIR="${current_arg#-d}"
+      fi
       shift
       ;;
-    -d|--outdir) # Separated: -d ./out
-      shift
-      if [ $# -eq 0 ] || [[ "$1" == -* ]]; then echo "Error: -d requires directory path value." >&2; usage; exit 1; fi
-      EXTRACT_DIR="$1"
-      shift
+    -d|--outdir) # Separated: -d ./out (only for regular extract)
+      if ! $DIFF_EXTRACT_MODE; then
+        shift
+        if [ $# -eq 0 ] || [[ "$1" == -* ]]; then echo "Error: -d requires directory path value." >&2; usage; exit 1; fi
+        EXTRACT_DIR="$1"
+        shift
+      fi
       ;;
       
     -p?*) # Attached: -p"mypattern"
@@ -500,10 +559,19 @@ while [ $# -gt 0 ]; do
       exit 1
       ;;
       
-    *) # Positional arguments (targets for pack, or archive_file for other commands)
-      if [ "$COMMAND" == "pack" ]; then
+    *) # Positional arguments (targets for pack/diff, or archive_file for other commands)
+      if [[ "$COMMAND" == "pack" || "$COMMAND" == "extract-diff" ]]; then
         # Simply collect all targets without filtering here
         TARGETS+=("$current_arg")
+      elif [[ "$COMMAND" == "verify-diff" || "$COMMAND" == "apply-diff" ]]; then
+        if [ -z "$DIFF_INPUT_FILE" ]; then
+          DIFF_INPUT_FILE="$current_arg"
+        elif [[ "$COMMAND" == "apply-diff" ]]; then
+          # For apply-diff, additional args are target directories
+          TARGETS+=("$current_arg")
+        else
+          echo "Error: Too many arguments for $COMMAND operation." >&2; usage; exit 1;
+        fi
       else # list, extract, verify
         if [ -z "$ARCHIVE_FILE" ]; then
           ARCHIVE_FILE="$current_arg"
@@ -547,18 +615,15 @@ case "$COMMAND" in
       if [ "$PAK_DEBUG" = "true" ]; then
         echo "pak4: DEBUG: Applying post-parse extension filter" >&2
       fi
-      
       filtered_targets=()
       for target in "${TARGETS[@]}"; do
         should_add_target=true
-        
         if [ -f "$target" ]; then
           # It's a file - check extension
           file_ext=""
           if [[ "$target" == *.* ]]; then
             file_ext=".${target##*.}"
           fi
-          
           should_add_target=false
           for req_ext in "${INCLUDE_EXTENSIONS[@]}"; do
             if [[ "$file_ext" == "$req_ext" ]]; then
@@ -566,7 +631,6 @@ case "$COMMAND" in
               break
             fi
           done
-          
           if ! $should_add_target && ! $QUIET; then
             echo "pak4: Filtering out '$target' (extension '$file_ext' not in: ${INCLUDE_EXTENSIONS[*]})" >&2
           fi
@@ -640,6 +704,28 @@ case "$COMMAND" in
     fi
     ;;
     
+  # NEW: Method diff commands
+  extract-diff)
+    if [ ${#TARGETS[@]} -eq 0 ]; then
+      echo "Error: No files specified for method diff extraction." >&2; usage; exit 1;
+    fi
+    extract_method_diff
+    ;;
+    
+  verify-diff)
+    if [ -z "$DIFF_INPUT_FILE" ]; then
+      echo "Error: No diff file specified for verification." >&2; usage; exit 1;
+    fi
+    verify_method_diff
+    ;;
+    
+  apply-diff)
+    if [ -z "$DIFF_INPUT_FILE" ]; then
+      echo "Error: No diff file specified for application." >&2; usage; exit 1;
+    fi
+    apply_method_diff
+    ;;
+    
   list)
     if [ -z "$ARCHIVE_FILE" ]; then echo "Error: No archive file specified for listing." >&2; usage; exit 1; fi
     call_python_core_command "list_archive_contents" "$ARCHIVE_FILE" "" "$EXTRACT_PATTERN"
@@ -658,7 +744,6 @@ case "$COMMAND" in
   verify)
     if [ -z "$ARCHIVE_FILE" ]; then echo "Error: No archive file specified for verification." >&2; usage; exit 1; fi
     echo "Verifying: $ARCHIVE_FILE (basic check)" >&2
-    
     first_line=""
     if ! IFS= read -r first_line < "$ARCHIVE_FILE"; then
       echo "Error: Cannot read archive file $ARCHIVE_FILE for verification." >&2
