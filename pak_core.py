@@ -11,6 +11,9 @@ import re
 import argparse
 import tempfile
 import subprocess
+import hashlib
+import json
+from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Set, Any
@@ -52,6 +55,7 @@ class ArchiveConfig:
     include_extensions: List[str] = field(default_factory=list) # List of strings like ".py", ".md"
     targets: List[Path] = field(default_factory=list) # List of Path objects
     quiet: bool = False
+    output_file: Optional[str] = None # For cache file generation
 
 class CompressionStrategy(ABC):
     @abstractmethod
@@ -522,13 +526,112 @@ class ASTCompression(CompressionStrategy):
 
         return "\n".join(elements) if elements else f"# No generic structure (AST, {language})"
 
+class SemanticCache:
+    """Manages SHA-256 based caching for semantic compression results"""
+    
+    def __init__(self, cache_file_path: Optional[str] = None):
+        self.cache_file_path = cache_file_path
+        self.cache_data: Dict[str, Dict[str, Any]] = {}
+        self.cache_modified = False
+        
+        if cache_file_path:
+            self._load_cache()
+    
+    def _load_cache(self) -> None:
+        """Load existing cache from file"""
+        if not self.cache_file_path or not Path(self.cache_file_path).exists():
+            return
+            
+        try:
+            with open(self.cache_file_path, 'r', encoding='utf-8') as f:
+                loaded_data = json.load(f)
+                if isinstance(loaded_data, dict) and 'entries' in loaded_data:
+                    self.cache_data = loaded_data['entries']
+                    if not os.environ.get('PAK_QUIET', '').lower() == 'true':
+                        print(f"pak_core: Loaded semantic cache with {len(self.cache_data)} entries", file=sys.stderr)
+        except (json.JSONDecodeError, IOError) as e:
+            if not os.environ.get('PAK_QUIET', '').lower() == 'true':
+                print(f"pak_core: Warning: Could not load cache file {self.cache_file_path}: {e}", file=sys.stderr)
+            self.cache_data = {}
+    
+    def _save_cache(self) -> None:
+        """Save cache to file if modified"""
+        if not self.cache_modified or not self.cache_file_path:
+            return
+            
+        try:
+            cache_output = {
+                "cache_version": "1.0",
+                "created": datetime.now().isoformat(),
+                "entries": self.cache_data
+            }
+            
+            # Ensure parent directory exists
+            Path(self.cache_file_path).parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(self.cache_file_path, 'w', encoding='utf-8') as f:
+                json.dump(cache_output, f, indent=2, ensure_ascii=False)
+                
+            if not os.environ.get('PAK_QUIET', '').lower() == 'true':
+                print(f"pak_core: Saved semantic cache with {len(self.cache_data)} entries", file=sys.stderr)
+                
+        except IOError as e:
+            if not os.environ.get('PAK_QUIET', '').lower() == 'true':
+                print(f"pak_core: Warning: Could not save cache file {self.cache_file_path}: {e}", file=sys.stderr)
+    
+    def _calculate_file_hash(self, content: str) -> str:
+        """Calculate SHA-256 hash of file content"""
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()
+    
+    def get_cached_result(self, file_path: str, content: str) -> Optional[Tuple[str, str]]:
+        """Get cached compression result if file hasn't changed"""
+        if not self.cache_file_path:
+            return None
+            
+        file_hash = self._calculate_file_hash(content)
+        cache_key = str(Path(file_path).as_posix())  # Normalize path
+        
+        if cache_key in self.cache_data:
+            cached_entry = self.cache_data[cache_key]
+            if cached_entry.get('sha256') == file_hash:
+                if not os.environ.get('PAK_QUIET', '').lower() == 'true':
+                    print(f"pak_core: Using cached semantic result for {Path(file_path).name}", file=sys.stderr)
+                return cached_entry['semantic_result'], cached_entry['method']
+        
+        return None
+    
+    def store_result(self, file_path: str, content: str, semantic_result: str, method: str) -> None:
+        """Store compression result in cache"""
+        if not self.cache_file_path:
+            return
+            
+        file_hash = self._calculate_file_hash(content)
+        cache_key = str(Path(file_path).as_posix())  # Normalize path
+        
+        self.cache_data[cache_key] = {
+            'sha256': file_hash,
+            'semantic_result': semantic_result,
+            'method': method + ' (cached)',
+            'timestamp': datetime.now().isoformat(),
+            'file_size': len(content)
+        }
+        
+        self.cache_modified = True
+    
+    def finalize(self) -> None:
+        """Save cache if needed (call at end of processing)"""
+        if self.cache_modified:
+            self._save_cache()
+
 class SemanticCompression(CompressionStrategy):
     """LLM-based semantic compression using external semantic_compressor.py
-    MODIFIED: Now ALWAYS applies semantic compression regardless of efficiency."""
+    MODIFIED: Now ALWAYS applies semantic compression regardless of efficiency.
+    ENHANCED: Added SHA-256 based caching to avoid repeated LLM calls."""
 
-    def __init__(self):
+    def __init__(self, cache: Optional[SemanticCache] = None):
         self.compressor_path = os.environ.get('SEMANTIC_COMPRESSOR_PATH')
         self.fallback_strategy = ASTCompression() if AST_AVAILABLE else AggressiveTextCompression()
+        self.cache = cache
 
     def compress(self, content: str, file_path: Path, language: str) -> Tuple[str, str]:
         if not self.compressor_path or not Path(self.compressor_path).exists():
@@ -539,6 +642,12 @@ class SemanticCompression(CompressionStrategy):
         # Only skip completely empty files
         if not content.strip():
             return content, "semantic-skip (empty)"
+
+        # Check cache first
+        if self.cache:
+            cached_result = self.cache.get_cached_result(str(file_path), content)
+            if cached_result:
+                return cached_result
 
         try:
             with tempfile.NamedTemporaryFile(mode='w', suffix=f'.{language}', delete=False, encoding='utf-8') as temp_file:
@@ -559,7 +668,13 @@ class SemanticCompression(CompressionStrategy):
                     if compressed_size > 0:
                         compression_ratio = original_size / compressed_size
                         # MODIFIED: Always return semantic compression, no efficiency check
-                        return compressed_content, f"semantic-llm ({compression_ratio:.1f}x ratio, always-applied)"
+                        result_tuple = (compressed_content, f"semantic-llm ({compression_ratio:.1f}x ratio, always-applied)")
+                        
+                        # Store in cache if available
+                        if self.cache:
+                            self.cache.store_result(str(file_path), content, compressed_content, result_tuple[1])
+                        
+                        return result_tuple
                     else:
                         # Empty response - fall back
                         return self.fallback_strategy.compress(content, file_path, language)
@@ -935,9 +1050,16 @@ class SmartArchiver:
         self.archive_uuid = self._generate_archive_uuid()
         self.included_file_count = 0
 
+        # Initialize cache for semantic compression
+        cache_file_path = None
+        if config.output_file and config.compression_level in ['semantic', 'smart']:
+            cache_file_path = config.output_file + '.cache'
+        
+        self.semantic_cache = SemanticCache(cache_file_path) if cache_file_path else None
+
         # Initialize compression strategies
         ast_compressor = ASTCompression() if AST_AVAILABLE else AggressiveTextCompression()
-        semantic_compressor = SemanticCompression()
+        semantic_compressor = SemanticCompression(self.semantic_cache)
 
         # Print AST availability info
         if AST_AVAILABLE and self.config.compression_level in ['aggressive', 'smart']:
@@ -974,6 +1096,11 @@ class SmartArchiver:
             processed_entries = self._standard_process_files(files_to_process, strategy)
 
         self.included_file_count = len(processed_entries)
+        
+        # Finalize cache if we have one
+        if self.semantic_cache:
+            self.semantic_cache.finalize()
+        
         return self._generate_archive_output_string(processed_entries)
 
     def _collect_files(self) -> List[Path]:
@@ -1565,6 +1692,9 @@ def main():
 
         pack_parser.add_argument('--quiet', '-q', action='store_true',
                                  help='Suppress non-error messages to stderr.')
+        
+        pack_parser.add_argument('--output', '-o', 
+                                 help='Output file path (enables caching for semantic compression)')
 
         # List subcommand
         list_parser = subparsers.add_parser('list', help='List archive contents')
@@ -1609,6 +1739,9 @@ def main():
 
         parser.add_argument('--quiet', '-q', action='store_true',
                             help='Suppress non-error messages to stderr.')
+
+        parser.add_argument('--output', '-o', 
+                            help='Output file path (enables caching for semantic compression)')
 
         parser.add_argument('--version', action='version',
                             version=f'%(prog)s {VERSION} (AST Support: {"Enabled" if AST_AVAILABLE else "Disabled"})')
@@ -1659,7 +1792,8 @@ def main():
             max_tokens=args.max_tokens,
             include_extensions=normalized_extensions,
             targets=[Path(t) for t in args.targets],
-            quiet=args.quiet
+            quiet=args.quiet,
+            output_file=getattr(args, 'output', None)
         )
 
         # Create and run archiver
@@ -1667,7 +1801,20 @@ def main():
         generated_archive_content = archiver_instance.create_archive()
 
         if generated_archive_content:
-            print(generated_archive_content, end='')
+            if args.output:
+                # Write to output file
+                try:
+                    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+                    with open(args.output, 'w', encoding='utf-8') as f:
+                        f.write(generated_archive_content)
+                    if not args.quiet:
+                        print(f"pak_core: Archive written to {args.output}", file=sys.stderr)
+                except IOError as e:
+                    print(f"Error writing to output file {args.output}: {e}", file=sys.stderr)
+                    return False
+            else:
+                # Print to stdout (default behavior)
+                print(generated_archive_content, end='')
             return True
         else:
             return False
