@@ -95,8 +95,8 @@ class MethodDiffManager:
         """
         method_name = diff_detail['method_name']
         # Use the precise signature from the analyzer if available, otherwise a simple "def name"
-        find_method_signature_str = diff_detail.get('old_signature', f"def {method_name}")
-                                    if diff_detail['type'] != 'added' else ""
+        find_method_signature_str = (diff_detail.get('old_signature', f"def {method_name}")
+                                     if diff_detail['type'] != 'added' else "")
 
 
         # Determine 'until_exclude' by finding the start of the *next* definition in the base content

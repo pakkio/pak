@@ -138,11 +138,11 @@ def main():
 
         elif args.command == 'list':
             if not args.targets: parser.error("'list' command requires an archive file path.")
-            PakArchive.list_archive(args.targets[0], detailed=False, pattern=args.pattern, quiet=args.quiet)
+            PakArchive.list_archive(args.targets[0], detailed=False, file_path_pattern=args.pattern, quiet=args.quiet)
 
         elif args.command == 'list-detailed':
             if not args.targets: parser.error("'list-detailed' command requires an archive file path.")
-            PakArchive.list_archive(args.targets[0], detailed=True, pattern=args.pattern, quiet=args.quiet)
+            PakArchive.list_archive(args.targets[0], detailed=True, file_path_pattern=args.pattern, quiet=args.quiet)
 
         elif args.command == 'verify':
             if not args.targets: parser.error("'verify' command requires an archive file path.")

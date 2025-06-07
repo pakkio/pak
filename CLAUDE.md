@@ -7,9 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Pak is a semantic compression tool family designed to solve the copy-paste workflow problem when working with LLMs. It packages multiple files into LLM-friendly formats and extracts modified code back to proper file structures.
 
 The repository contains multiple variants:
-- **pak** (Bash script) - Simple, zero-dependency solution
+- **pak** (Bash script) - Simple, zero-dependency solution  
 - **pak3** (Bash + Python) - Enhanced with AST analysis
-- **pak4** (Python core) - Full-featured with semantic LLM compression
+- **pak4** (Python core) - Full-featured with semantic LLM compression and method-level diff support
 
 ## Core Architecture
 
@@ -21,6 +21,7 @@ The repository contains multiple variants:
 - `FilePrioritizer`: Assigns importance scores to files for smart compression
 - `LanguageDetector`: Maps file extensions to language identifiers
 - Archive format handlers for listing and extraction
+- **Method-level diff system**: Generate, verify, and apply granular code changes
 
 **Compression Strategy Pattern**:
 - `CompressionStrategy` (ABC) with implementations for different levels
@@ -49,7 +50,26 @@ __PAK_DATA_<uuid>_END__
 
 ## Common Development Commands
 
-### Running pak4/pak_core.py
+### Setup and Dependencies
+```bash
+# Install Python dependencies via Poetry (includes pytest)
+poetry install
+
+# Make bash scripts executable
+chmod +x pak pak3 pak4
+
+# Setup environment for semantic compression (optional)
+cp .env.sample .env  # Configure OPENROUTER_API_KEY if needed
+
+# Verify installation and check tree-sitter availability
+./pak4 --version
+python3 pak_core.py --version
+
+# Verify pytest setup
+poetry run pytest --version
+```
+
+### Running pak4/pak_core.py (Main Python Core)
 ```bash
 # Basic packing (default pack command)
 python3 pak_core.py src/ --compression-level smart --max-tokens 8000
@@ -59,32 +79,45 @@ python3 pak_core.py pack src/ -c smart -m 8000
 python3 pak_core.py list archive.pak
 python3 pak_core.py extract archive.pak -d output/
 
-# With semantic compression (requires LLM setup)
-SEMANTIC_COMPRESSOR_PATH=/path/to/semantic_compressor.py python3 pak_core.py -c semantic src/
+# Method diff workflow (pak4 specific feature)
+./pak4 -d original.py modified.py -o changes.diff  # Generate diff
+./pak4 -vd changes.diff                            # Verify diff
+./pak4 -ad changes.diff target_project/            # Apply diff
+
+# With semantic compression (requires .env setup)
+PAK_DEBUG=true python3 pak_core.py -c semantic src/
 ```
 
-### Development and Testing
+### Testing Commands
 ```bash
-# Install dependencies
-poetry install
+# Run main integration test suite (method diff functionality)
+python3 test_method_diff.py
 
-# Run with debug output
-PAK_DEBUG=true python3 pak_core.py -c semantic test_file.py
+# Run pytest-based unit tests for individual modules
+poetry run pytest tests/ -v
 
-# Test AST availability
-python3 pak_core.py --version
+# Test semantic compressor with mock LLM (no API calls)
+python3 test_semantic_compressor.py <file_path> semantic <language>
+
+# Format code with Black
+black .
+
+# Test individual components manually
+./pak4 test_method_diff/ -c smart -m 5000    # Test with small dataset
+./pak4 -l archive.pak                        # Verify archive format
+./pak4 -vd changes.diff                      # Verify diff syntax
 ```
 
-### Bash Scripts
+### Bash Script Variants
 ```bash
-# Make scripts executable
-chmod +x pak pak3 pak4
-
-# Run bash version (simple)
+# pak - Simple bash version (zero dependencies)
 ./pak src/ --compress-level medium
 
-# Run enhanced version
+# pak3 - Enhanced with Python AST analysis
 ./pak3 --compress-level smart --max-tokens 8000 src/
+
+# pak4 - Full featured with method diff support
+./pak4 . -c smart -m 8000 -o project.pak
 ```
 
 ## Key Development Patterns
@@ -105,25 +138,97 @@ chmod +x pak pak3 pak4
 - Add patterns to `LOW_PRIORITY_PATTERNS` for exclusions
 - Update `CRITICAL_FILENAMES` for special files
 
-## Testing Notes
+## Testing Architecture
 
-The project includes test files but uses ad-hoc testing rather than a formal framework. When testing:
+The project uses a **mixed testing approach** combining integration tests and unit tests:
 
-1. Use small test directories with known file structures
-2. Verify archive format with `pak_core.py list` command
-3. Test round-trip: pack → extract → compare
-4. Check token estimation accuracy with `--max-tokens`
+### Test Structure
+- **`test_method_diff.py`** - Main integration test suite for pak4 method diff system (creates real test files, runs CLI commands, verifies results)
+- **`test_method_diff/`** - Directory with original/modified/target test files and generated diffs for testing
+- **`test_pak_core_integration.py`** - Integration tests for pak_core.py Python backend (tests all CLI commands end-to-end)
+- **`test_pak4_integration.py`** - Integration tests for pak4 bash script driving pak_core.py (tests full user workflow)
+- **`tests/`** - pytest-based unit tests for the 6 core modules:
+  - `test_pak_analyzer.py` - Tests language detection and analysis
+  - `test_pak_archive_manager.py` - Tests archive format handling
+  - `test_pak_compressor.py` - Tests compression strategies and token counting
+  - `test_pak_differ.py` - Tests method diff extraction and application
+  - `test_pak_utils.py` - Tests file collection utilities
+  - `test_llm_wrapper.py` - Tests LLM API integration
+- **`test_semantic_compressor.py`** - Mock LLM for testing semantic compression without API calls
 
-## Environment Variables
+### Testing Patterns
+1. **Integration Testing**: Create test files, run actual pak CLI commands, verify end-to-end workflows
+2. **Unit Testing**: pytest-based tests for individual modules and functions
+3. **Round-trip Testing**: pack → extract → compare workflows to ensure data integrity
+4. **Mock Testing**: Use fake semantic compressor to test compression logic without API costs
+5. **Multi-language Testing**: Test method diff system across Python, JavaScript, and Java
 
+### Development Testing Workflow
+```bash
+# Primary integration tests
+python3 test_method_diff.py                      # Original method diff integration test
+poetry run pytest test_pak_core_integration.py   # pak_core.py backend integration tests
+poetry run pytest test_pak4_integration.py       # pak4 bash script integration tests
+
+# Unit tests for the 6 core modules
+poetry run pytest tests/ -v                      # Run all module tests
+poetry run pytest tests/test_pak_differ.py -v    # Test method diff functionality
+poetry run pytest tests/test_pak_compressor.py -v # Test compression strategies
+poetry run pytest tests/test_pak_analyzer.py -v   # Test language detection
+
+# Manual verification with debug output
+PAK_DEBUG=true ./pak4 test_method_diff/ -c smart -m 5000
+
+# Test archive integrity
+./pak4 -v archive.pak
+
+# Test specific method diff workflow
+./pak4 --diff original.py modified.py -o test.diff
+./pak4 -vd test.diff
+./pak4 -ad test.diff target_file.py
+
+# Run all tests in sequence
+poetry run pytest tests/ test_pak_core_integration.py test_pak4_integration.py -v
+```
+
+## Environment Variables and Configuration
+
+- `OPENROUTER_API_KEY`: API key for LLM-based semantic compression (in .env file)
 - `SEMANTIC_COMPRESSOR_PATH`: Path to semantic_compressor.py for LLM compression
 - `PAK_DEBUG`: Enable detailed debug output for semantic compression
 - `PAK_QUIET`: Suppress stderr messages during compression
 - Tree-sitter requires proper Python environment with required packages
 
+### Configuration Files
+- **`.env`** - Environment variables for API keys (copy from .env.sample)
+- **`pyproject.toml`** - Python dependencies managed by Poetry
+- **No formal linting config** - Black is available but runs manually
+
 ## Integration Points
 
-- **LLM Integration**: Uses `llm_wrapper.py` for API calls
-- **Tree-sitter**: Optional dependency for AST analysis
-- **Shell Integration**: Bash scripts provide CLI interface to Python core
-- **Archive Format**: Text-based format designed for LLM consumption and human readability
+- **LLM Integration**: Uses `llm_wrapper.py` for API calls to external LLM services
+- **Tree-sitter**: Optional dependency for AST analysis (automatically falls back to text-based compression if unavailable)
+- **Shell Integration**: Bash scripts (pak, pak3, pak4) provide CLI interface to Python core
+- **Archive Format**: Custom text-based format with UUID markers designed for LLM consumption and human readability
+- **Multi-language Support**: Python, JavaScript, Java method extraction and diff application
+
+## Development Notes
+
+### Code Quality
+- Use `black .` for code formatting before commits
+- Run both integration tests (`python3 test_method_diff.py`) and unit tests for the 6 core modules (`poetry run pytest tests/ -v`) 
+- No automated CI/CD - testing is manual
+- Debug mode available via `PAK_DEBUG=true` environment variable
+
+### Module Architecture
+The codebase follows a modular pattern where `pak_core.py` orchestrates specialized modules:
+- **pak_compressor.py** - Compression strategies and token management
+- **pak_differ.py** - Method-level diff extraction and application  
+- **pak_archive_manager.py** - Archive format handling
+- **pak_utils.py** - File collection and utilities
+- **pak_analyzer.py** - Language-specific analysis
+
+### Version Management
+- Each bash script (pak, pak3, pak4) maintains its own version number
+- pak4 is the current full-featured version (v4.1.21+)
+- Backward compatibility maintained across versions

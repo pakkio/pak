@@ -56,8 +56,8 @@ class CacheManager:
         # Or, if archive_path_or_id is simple, just use it.
         # This example uses a generic cache file for simplicity, but could be per-archive.
         self.cache_file = cache_dir / f"compression_cache.json"
-        self.cache: Dict[str, Any] = self._load_cache()
         self.quiet = quiet
+        self.cache: Dict[str, Any] = self._load_cache()
 
     def _log(self, message: str):
         if not self.quiet:
