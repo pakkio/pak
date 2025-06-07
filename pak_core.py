@@ -719,7 +719,7 @@ class MethodDiffApplier:
     def apply_diff(self, diff: MethodDiff, target_dir: Path) -> Tuple[bool, str]:
         """Apply a single method diff to the target file.
         Returns (success, error_message)"""
-        target_file = target_dir / Path(diff.file_path).name
+        target_file = target_dir / diff.file_path
         
         if not target_file.exists():
             return False, f"Target file does not exist: {target_file}"
