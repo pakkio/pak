@@ -73,8 +73,31 @@ def test_llm_connection() -> bool:
     return success and "CONNECTION_OK" in response
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
+    import os
+    from pathlib import Path
+    
+    try:
+        from dotenv import load_dotenv
+        
+        # Try current directory first, then script directory
+        script_dir = Path(__file__).parent
+        env_paths = [
+            Path.cwd() / ".env",  # Current working directory
+            script_dir / ".env"   # llm_wrapper.py script directory
+        ]
+        
+        for env_path in env_paths:
+            if env_path.exists():
+                load_dotenv(env_path)
+                if os.environ.get('PAK_DEBUG') == 'true':
+                    print(f"llm_wrapper: Loaded .env from {env_path}")
+                break
+        else:
+            if os.environ.get('PAK_DEBUG') == 'true':
+                print(f"llm_wrapper: No .env file found in {[str(p) for p in env_paths]}")
+                
+    except ImportError:
+        pass
 
     print("Testing LLM connection...")
     if test_llm_connection():

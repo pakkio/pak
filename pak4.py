@@ -50,10 +50,22 @@ def load_env():
         from dotenv import load_dotenv
         
         # Try current directory first, then script directory
-        for env_path in [".env", Path(__file__).parent / ".env"]:
-            if (isinstance(env_path, Path) and env_path.exists()) or (isinstance(env_path, str) and os.path.exists(env_path)):
+        script_dir = Path(__file__).parent
+        env_paths = [
+            Path.cwd() / ".env",  # Current working directory
+            script_dir / ".env"   # pak4.py script directory
+        ]
+        
+        for env_path in env_paths:
+            if env_path.exists():
                 load_dotenv(env_path)
+                if os.environ.get('PAK_DEBUG') == 'true':
+                    print(f"pak4: Loaded .env from {env_path}", file=sys.stderr)
                 break
+        else:
+            if os.environ.get('PAK_DEBUG') == 'true':
+                print(f"pak4: No .env file found in {[str(p) for p in env_paths]}", file=sys.stderr)
+                
     except ImportError:
         pass  # dotenv not available, skip
 

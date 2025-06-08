@@ -155,7 +155,24 @@ def main():
     """CLI interface for semantic compression"""
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        
+        # Try current directory first, then script directory
+        script_dir = Path(__file__).parent
+        env_paths = [
+            Path.cwd() / ".env",  # Current working directory
+            script_dir / ".env"   # semantic_compressor.py script directory
+        ]
+        
+        for env_path in env_paths:
+            if env_path.exists():
+                load_dotenv(env_path)
+                if os.environ.get('PAK_DEBUG') == 'true':
+                    print(f"semantic_compressor: Loaded .env from {env_path}", file=sys.stderr)
+                break
+        else:
+            if os.environ.get('PAK_DEBUG') == 'true':
+                print(f"semantic_compressor: No .env file found in {[str(p) for p in env_paths]}", file=sys.stderr)
+                
     except ImportError:
         pass
 

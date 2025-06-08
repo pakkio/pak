@@ -143,7 +143,7 @@ class SemanticCompressor:
     """Handles LLM-based semantic compression."""
     def __init__(self, quiet: bool = False):
         self.api_key = os.getenv('OPENROUTER_API_KEY')
-        self.model_name = os.getenv('PAK_SEMANTIC_MODEL', "anthropic/claude-3-haiku-20240307") # Default model
+        self.model_name = os.getenv('SEMANTIC_MODEL', "anthropic/claude-3-haiku-20240307") # Default model
         self.api_base_url = os.getenv('PAK_OPENROUTER_API_BASE', "https://openrouter.ai/api/v1")
         self.timeout = int(os.getenv('PAK_LLM_TIMEOUT', "60"))
         self.max_tokens_response = int(os.getenv('PAK_LLM_MAX_TOKENS', "2000"))
