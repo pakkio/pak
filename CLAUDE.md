@@ -8,14 +8,13 @@ Pak is a semantic compression tool family designed to solve the copy-paste workf
 
 The repository contains multiple variants:
 - **pak** (Bash script) - Simple, zero-dependency solution  
-- **pak3** (Bash + Python) - Enhanced with AST analysis
-- **pak4** (Python core) - Full-featured with semantic LLM compression and method-level diff support
+- **pak4.py** (Python CLI) - Full-featured with semantic LLM compression and method-level diff support
 
 ## Core Architecture
 
 ### Main Components
 
-**pak_core.py** - Primary Python backend containing:
+**pak4.py** - Primary Python CLI containing:
 - `SmartArchiver` class: Main orchestration for file collection, compression, and archive generation
 - Multiple compression strategies: None, Light, Medium, Aggressive (AST-based), and Semantic (LLM-based)
 - `FilePrioritizer`: Assigns importance scores to files for smart compression
@@ -69,23 +68,28 @@ python3 pak_core.py --version
 poetry run pytest --version
 ```
 
-### Running pak4/pak_core.py (Main Python Core)
+### Running pak4.py (Main Python CLI)
 ```bash
-# Basic packing (default pack command)
-python3 pak_core.py src/ --compression-level smart --max-tokens 8000
+# Basic packing (default command)
+./pak4.py src/ -c smart -m 8000
+# or
+python3 pak4.py src/ -c smart -m 8000
 
-# Using subcommands
-python3 pak_core.py pack src/ -c smart -m 8000
-python3 pak_core.py list archive.pak
-python3 pak_core.py extract archive.pak -d output/
+# List and extract operations
+./pak4.py -l archive.pak
+./pak4.py -x archive.pak -d output/
 
-# Method diff workflow (pak4 specific feature)
-./pak4 -d original.py modified.py -o changes.diff  # Generate diff
-./pak4 -vd changes.diff                            # Verify diff
-./pak4 -ad changes.diff target_project/            # Apply diff
+# Method diff workflow
+./pak4.py --diff original.py modified.py -o changes.diff  # Generate diff
+./pak4.py -vd changes.diff                               # Verify diff
+./pak4.py -ad changes.diff target_project/               # Apply diff
 
 # With semantic compression (requires .env setup)
-PAK_DEBUG=true python3 pak_core.py -c semantic src/
+PAK_DEBUG=true ./pak4.py -c semantic src/
+
+# Version and help
+./pak4.py --version
+./pak4.py --help
 ```
 
 ### Testing Commands
@@ -108,16 +112,16 @@ black .
 ./pak4 -vd changes.diff                      # Verify diff syntax
 ```
 
-### Bash Script Variants
+### Script Variants
 ```bash
 # pak - Simple bash version (zero dependencies)
 ./pak src/ --compress-level medium
 
-# pak3 - Enhanced with Python AST analysis
-./pak3 --compress-level smart --max-tokens 8000 src/
+# pak4.py - Full featured Python CLI (recommended)
+./pak4.py . -c smart -m 8000 -o project.pak
 
-# pak4 - Full featured with method diff support
-./pak4 . -c smart -m 8000 -o project.pak
+# Legacy pak3/pak4 bash scripts (deprecated)
+./pak3 --compress-level smart --max-tokens 8000 src/
 ```
 
 ## Key Development Patterns
@@ -167,8 +171,8 @@ The project uses a **mixed testing approach** combining integration tests and un
 ```bash
 # Primary integration tests
 python3 test_method_diff.py                      # Original method diff integration test
-poetry run pytest test_pak_core_integration.py   # pak_core.py backend integration tests
-poetry run pytest test_pak4_integration.py       # pak4 bash script integration tests
+python3 test_pak_core_integration.py             # pak_core.py CLI integration tests
+python3 test_pak4_integration.py                 # pak_core.py integration tests (updated)
 
 # Unit tests for the 6 core modules
 poetry run pytest tests/ -v                      # Run all module tests
@@ -177,18 +181,18 @@ poetry run pytest tests/test_pak_compressor.py -v # Test compression strategies
 poetry run pytest tests/test_pak_analyzer.py -v   # Test language detection
 
 # Manual verification with debug output
-PAK_DEBUG=true ./pak4 test_method_diff/ -c smart -m 5000
+PAK_DEBUG=true ./pak4.py test_method_diff/ -c smart -m 5000
 
 # Test archive integrity
-./pak4 -v archive.pak
+./pak4.py -v archive.pak
 
 # Test specific method diff workflow
-./pak4 --diff original.py modified.py -o test.diff
-./pak4 -vd test.diff
-./pak4 -ad test.diff target_file.py
+./pak4.py --diff original.py modified.py -o test.diff
+./pak4.py -vd test.diff
+./pak4.py -ad test.diff target_file.py
 
 # Run all tests in sequence
-poetry run pytest tests/ test_pak_core_integration.py test_pak4_integration.py -v
+poetry run pytest tests/ -v && python3 test_pak_core_integration.py && python3 test_pak4_integration.py
 ```
 
 ## Environment Variables and Configuration
@@ -208,8 +212,8 @@ poetry run pytest tests/ test_pak_core_integration.py test_pak4_integration.py -
 
 - **LLM Integration**: Uses `llm_wrapper.py` for API calls to external LLM services
 - **Tree-sitter**: Optional dependency for AST analysis (automatically falls back to text-based compression if unavailable)
-- **Shell Integration**: Bash scripts (pak, pak3, pak4) provide CLI interface to Python core
-- **Archive Format**: Custom text-based format with UUID markers designed for LLM consumption and human readability
+- **CLI Integration**: `pak4.py` is the main Python CLI entry point
+- **Archive Format**: Custom JSON-based format with UUID markers designed for LLM consumption and human readability
 - **Multi-language Support**: Python, JavaScript, Java method extraction and diff application
 
 ## Development Notes
@@ -228,7 +232,21 @@ The codebase follows a modular pattern where `pak_core.py` orchestrates speciali
 - **pak_utils.py** - File collection and utilities
 - **pak_analyzer.py** - Language-specific analysis
 
+### Architecture Simplification (v4.2.0)
+**IMPORTANT**: The pak tool family has been simplified to two main variants:
+
+- **pak** (Bash script) - Simple, zero-dependency solution for basic tasks
+- **pak4.py** (Python CLI) - Full-featured with semantic compression and method diff support
+
+**Benefits of the simplification:**
+- Eliminates confusing multiple variants (pak3, pak4 bash wrapper)
+- Single Python entry point (`pak4.py`) for all advanced features
+- Direct Python execution is more reliable and debuggable
+- Unified CLI interface with consistent argument handling
+- Better error messages and help system
+
 ### Version Management
-- Each bash script (pak, pak3, pak4) maintains its own version number
-- pak4 is the current full-featured version (v4.1.21+)
+- `pak` (bash) and `pak4.py` (Python) are the two supported variants
+- pak4.py is version 4.2.0+ with full feature set
+- Legacy pak3/pak4 bash scripts are deprecated
 - Backward compatibility maintained across versions

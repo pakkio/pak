@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Integration tests for pak4 bash script
-Tests the full pak4 CLI workflow including bash argument parsing and pak_core.py orchestration
+Integration tests for pak4 (now pak_core.py)
+Tests the full pak4 CLI workflow using the refactored Python entry point
 """
 
 import os
@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import json
+import sys
 from pathlib import Path
 
 # Import pytest only if running with pytest
@@ -19,11 +20,11 @@ except ImportError:
 
 
 class Pak4IntegrationTester:
-    """Integration test class for pak4 bash script functionality"""
+    """Integration test class for pak4 (pak_core.py) functionality"""
     
     def __init__(self):
         self.test_dir = None
-        self.pak4_script = Path(__file__).parent / "pak4"
+        self.pak4_script = Path(__file__).parent / "pak4.py"
         
     def setup_test_environment(self):
         """Create temporary test environment with sample files"""
@@ -201,8 +202,8 @@ def validate_input(value):
             shutil.rmtree(self.test_dir)
     
     def run_pak4(self, args, input_data=None):
-        """Run pak4 bash script with given arguments and return result"""
-        cmd = [str(self.pak4_script)] + args
+        """Run pak4.py with given arguments and return result"""
+        cmd = [sys.executable, str(self.pak4_script)] + args
         
         try:
             result = subprocess.run(

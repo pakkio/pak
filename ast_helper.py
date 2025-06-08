@@ -22,7 +22,8 @@ def get_language_object(lang_name_short):
     """
     try:
         if lang_name_short == 'python':
-            return Language(tree_sitter_python.language())
+            # Use the direct language object without wrapping in Language()
+            return tree_sitter_python.language()
         elif lang_name_short in ['javascript', 'js']:
             return tree_sitter_languages.get_language('javascript')
         elif lang_name_short == 'typescript':
@@ -168,7 +169,8 @@ def main():
             print(source_bytes.decode('utf8', errors='ignore'), end="")
             sys.exit(0) # Graceful fallback to raw content for pak3 to capture
 
-        parser = Parser(language_obj)
+        parser = Parser()
+        parser.set_language(language_obj)
         tree = parser.parse(source_bytes)
 
         if level == "aggressive":

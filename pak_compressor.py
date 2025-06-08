@@ -6,15 +6,15 @@ import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-# Import PythonAnalyzer from the sibling module
+# Import MultiLanguageAnalyzer from the sibling module
 try:
-    from pak_analyzer import PythonAnalyzer
+    from pak_analyzer import MultiLanguageAnalyzer
 except ImportError:
     # This fallback is for direct execution of this file, assuming pak_analyzer.py is in the same dir
     # For the main pak_core.py orchestrator, sys.path should be set up correctly.
     if __name__ == '__main__':
         sys.path.append(os.path.dirname(__file__)) # Add current dir to path if run directly
-        from pak_analyzer import PythonAnalyzer
+        from pak_analyzer import MultiLanguageAnalyzer
     else:
         raise # Re-raise if not main, as it implies a real import issue from orchestrator
 
@@ -30,19 +30,48 @@ except ImportError:
     requests = None # Define requests as None if import fails
 
 class TokenCounter:
-    """Simple token counter for various file types."""
+    """Accurate token counter using tiktoken for OpenAI-compatible token counting."""
+    
+    # Cache the encoding to avoid repeated initialization
+    _encoding = None
+    
+    @classmethod
+    def _get_encoding(cls):
+        """Get tiktoken encoding, with fallback to heuristic if tiktoken unavailable."""
+        if cls._encoding is None:
+            try:
+                import tiktoken
+                # Use cl100k_base encoding (GPT-4, GPT-3.5-turbo)
+                cls._encoding = tiktoken.get_encoding("cl100k_base")
+            except ImportError:
+                cls._encoding = "fallback"  # Flag for heuristic mode
+        return cls._encoding
+    
     @staticmethod
     def count_tokens(content: str, file_type: str = "text") -> int:
         if not content:
             return 0
-        words = len(content.split())
-        chars = len(content)
-        if file_type in ["python", "javascript", "typescript", "java", "c", "cpp", "csharp", "go", "rust"]:
-            return int((words * 1.3 + chars * 0.25) / 3) # Heuristic for code
-        elif file_type in ["markdown", "text", "log", "html", "xml"]:
-            return int(words * 0.75 + chars * 0.1) # Heuristic for text/markup
-        else: # Generic fallback
-            return int(words * 1.0)
+            
+        encoding = TokenCounter._get_encoding()
+        
+        if encoding == "fallback":
+            # Fallback to original heuristic if tiktoken not available
+            words = len(content.split())
+            chars = len(content)
+            if file_type in ["python", "javascript", "typescript", "java", "c", "cpp", "csharp", "go", "rust"]:
+                return int((words * 1.3 + chars * 0.25) / 3) # Heuristic for code
+            elif file_type in ["markdown", "text", "log", "html", "xml"]:
+                return int(words * 0.75 + chars * 0.1) # Heuristic for text/markup
+            else: # Generic fallback
+                return int(words * 1.0)
+        else:
+            # Use tiktoken for accurate token counting
+            try:
+                tokens = encoding.encode(content)
+                return len(tokens)
+            except Exception:
+                # Fallback to heuristic if encoding fails
+                return int(len(content.split()) * 1.3)
 
 class CacheManager:
     """Manages SHA-256 based caching for semantic compression results."""
@@ -330,8 +359,8 @@ class Compressor:
         if not content.strip() and compression_level != "none":
             return {
                 "compressed_content": "", "original_size": original_size_bytes,
-                "compressed_tokens": 0, "compression_ratio": 1.0,
-                "method": "skip (empty/whitespace)"
+                "compressed_size": 0, "compressed_tokens": 0, "estimated_tokens": 0,
+                "compression_ratio": 1.0, "method": "skip (empty/whitespace)"
             }
 
         cached_result = None
@@ -348,6 +377,7 @@ class Compressor:
             cs = len(cc.encode('utf-8'))
             cached_result.setdefault("compressed_size", cs)
             cached_result.setdefault("compressed_tokens", TokenCounter.count_tokens(cc, file_type))
+            cached_result.setdefault("estimated_tokens", cached_result.get("compressed_tokens", 0))  # Add estimated_tokens alias
             cached_result.setdefault("compression_ratio", original_size_bytes / cs if cs > 0 else (1.0 if original_size_bytes == 0 else float('inf')))
             cached_result["method"] += " (cached)"
             return cached_result
@@ -370,6 +400,7 @@ class Compressor:
         compressed_content_str = result.get("compressed_content", "")
         result["compressed_size"] = len(compressed_content_str.encode('utf-8'))
         result["compressed_tokens"] = TokenCounter.count_tokens(compressed_content_str, file_type)
+        result["estimated_tokens"] = result["compressed_tokens"]  # Add estimated_tokens alias
 
         if result["compressed_size"] > 0:
             result["compression_ratio"] = original_size_bytes / result["compressed_size"]
@@ -441,25 +472,24 @@ class Compressor:
         return result_dict
 
     def _compress_aggressive(self, content: str, file_path: str, file_type: str) -> Dict[str, Any]:
-        if file_type == 'python':
-            try:
-                # PythonAnalyzer.extract_structure returns a dict or {"error":...}
-                py_structure = PythonAnalyzer.extract_structure(content)
-                if "error" not in py_structure and py_structure: # Check for error and non-empty
-                    # Format the structure as JSON for the compressed content
-                    # Add a header indicating AST extraction
-                    compressed_str = f"# PYTHON AST STRUCTURE (Aggressive)\n{json.dumps(py_structure, indent=2, sort_keys=True)}"
-                    return {"compressed_content": compressed_str, "method": "aggressive (py-ast)"}
-                else:
-                    self._log(f"Aggressive Python AST extraction failed or yielded empty for {file_path}. Error: {py_structure.get('error','')}. Falling back to medium.", is_error=bool(py_structure.get('error')))
-                    return self._compress_medium(content, file_path, file_type) # Fallback
-            except Exception as e: # Catch any unexpected error during AST analysis
-                self._log(f"Unexpected error during Python AST extraction for {file_path}: {e}. Falling back to medium.", is_error=True)
+        try:
+            # Use MultiLanguageAnalyzer for both Python and other languages
+            compressed_content = MultiLanguageAnalyzer.compress_with_ast(content, file_type, "aggressive")
+            
+            # If compression succeeded (content changed), return it
+            if compressed_content != content:
+                return {
+                    "compressed_content": compressed_content, 
+                    "method": f"aggressive ({file_type}-ast)"
+                }
+            else:
+                # AST compression failed or unavailable, fall back to medium
+                self._log(f"AST compression unavailable for {file_type} in {file_path}. Falling back to medium.")
                 return self._compress_medium(content, file_path, file_type)
-
-        # Placeholder for other languages: could use regex or tree-sitter if available
-        self._log(f"Aggressive compression not implemented for type '{file_type}' ({file_path}). Falling back to medium.")
-        return self._compress_medium(content, file_path, file_type)
+                
+        except Exception as e:
+            self._log(f"Unexpected error during AST compression for {file_path}: {e}. Falling back to medium.", is_error=True)
+            return self._compress_medium(content, file_path, file_type)
 
     def _remove_comments_and_empty_lines(self, text_content: str, file_type: str) -> str:
         # This is a very basic heuristic and might incorrectly remove things.

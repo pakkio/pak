@@ -2,6 +2,8 @@ import os
 import glob
 from pathlib import Path
 import sys # For printing warnings
+from typing import List, Dict, Optional, Set
+import fnmatch
 
 def collect_files(targets: list[str], extensions: list[str], quiet: bool = False) -> list[str]:
     """
@@ -76,3 +78,86 @@ if __name__ == '__main__':
     # Clean up dummy files
     import shutil
     shutil.rmtree("test_collect")
+
+def filter_files_by_pattern(files: List[str], pattern: str) -> List[str]:
+    """
+    Filter files by a Unix shell-style wildcard pattern.
+    
+    Args:
+        files: List of file paths to filter
+        pattern: Unix shell-style pattern (e.g., "*.py", "test_*")
+    
+    Returns:
+        List of files matching the pattern
+    """
+    if not pattern:
+        return files
+    
+    filtered = []
+    for file_path in files:
+        # Check both full path and just filename
+        if fnmatch.fnmatch(file_path, pattern) or fnmatch.fnmatch(os.path.basename(file_path), pattern):
+            filtered.append(file_path)
+    
+    return filtered
+
+def validate_file_access(file_paths: List[str], quiet: bool = False) -> List[str]:
+    """
+    Validate that files exist and are readable.
+    
+    Args:
+        file_paths: List of file paths to validate
+        quiet: If True, suppress warning messages
+    
+    Returns:
+        List of valid, accessible file paths
+    """
+    valid_files = []
+    
+    for file_path in file_paths:
+        try:
+            if os.path.exists(file_path) and os.access(file_path, os.R_OK):
+                valid_files.append(file_path)
+            elif not quiet:
+                print(f"pak_utils: Warning: Cannot access file '{file_path}'", file=sys.stderr)
+        except Exception as e:
+            if not quiet:
+                print(f"pak_utils: Warning: Error checking file '{file_path}': {e}", file=sys.stderr)
+    
+    return valid_files
+
+def get_file_stats(file_paths: List[str]) -> Dict[str, int]:
+    """
+    Get statistics about a collection of files.
+    
+    Args:
+        file_paths: List of file paths to analyze
+    
+    Returns:
+        Dictionary with file statistics
+    """
+    stats = {
+        'total_files': len(file_paths),
+        'total_size_bytes': 0,
+        'extensions': {},
+        'largest_file_size': 0,
+        'smallest_file_size': float('inf')
+    }
+    
+    for file_path in file_paths:
+        try:
+            size = os.path.getsize(file_path)
+            stats['total_size_bytes'] += size
+            stats['largest_file_size'] = max(stats['largest_file_size'], size)
+            stats['smallest_file_size'] = min(stats['smallest_file_size'], size)
+            
+            ext = Path(file_path).suffix.lower()
+            stats['extensions'][ext] = stats['extensions'].get(ext, 0) + 1
+            
+        except OSError:
+            continue  # Skip files that can't be accessed
+    
+    if stats['smallest_file_size'] == float('inf'):
+        stats['smallest_file_size'] = 0
+    
+    return stats

@@ -3,6 +3,8 @@ import sys
 import json
 import uuid
 import datetime
+import string
+import random
 import re # For pattern matching in list/extract
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -29,14 +31,19 @@ class PakArchive:
         self.compression_level = compression_level
         self.max_tokens = max_tokens # Token budgeting to be implemented if desired
         self.files_data: List[Dict[str, Any]] = [] # Stores file entries for the archive
-        self.archive_uuid: str = str(uuid.uuid4())
+        self.archive_uuid: str = self._generate_short_uuid()
         self.cache_manager: Optional[CacheManager] = None
         self.quiet: bool = quiet
-
+    
         # Accumulated totals
         self.total_original_size_bytes: int = 0
         self.total_compressed_size_bytes: int = 0
         self.total_estimated_tokens: int = 0
+    
+    def _generate_short_uuid(self) -> str:
+        """Generate a 4-character short UUID using letters and digits."""
+        chars = string.ascii_letters + string.digits  # a-z, A-Z, 0-9
+        return ''.join(random.choices(chars, k=4))
 
     def _log(self, message: str, is_error: bool = False):
         if not self.quiet or is_error:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Integration tests for pak_core.py
-Tests the main CLI functionality end-to-end by running pak_core.py as a subprocess
+Integration tests for pak4.py
+Tests the main CLI functionality end-to-end by running pak4.py as a subprocess
 """
 
 import os
@@ -18,12 +18,12 @@ except ImportError:
     pytest = None
 
 
-class PakCoreIntegrationTester:
-    """Integration test class for pak_core.py CLI functionality"""
+class Pak4IntegrationTester:
+    """Integration test class for pak4.py CLI functionality"""
     
     def __init__(self):
         self.test_dir = None
-        self.pak_core_path = Path(__file__).parent / "pak_core.py"
+        self.pak4_path = Path(__file__).parent / "pak4.py"
         
     def setup_test_environment(self):
         """Create temporary test environment with sample files"""
@@ -110,9 +110,9 @@ Run the calculator or use utility functions as needed.
         if self.test_dir and self.test_dir.exists():
             shutil.rmtree(self.test_dir)
     
-    def run_pak_core(self, args, input_data=None):
-        """Run pak_core.py with given arguments and return result"""
-        cmd = ["python3", str(self.pak_core_path)] + args
+    def run_pak4(self, args, input_data=None):
+        """Run pak4.py with given arguments and return result"""
+        cmd = ["python3", str(self.pak4_path)] + args
         
         try:
             result = subprocess.run(
@@ -149,8 +149,8 @@ Run the calculator or use utility functions as needed.
 if pytest:
     @pytest.fixture
     def pak_tester():
-        """Fixture that provides a PakCoreIntegrationTester instance"""
-        tester = PakCoreIntegrationTester()
+        """Fixture that provides a Pak4IntegrationTester instance"""
+        tester = Pak4IntegrationTester()
         tester.setup_test_environment()
         yield tester
         tester.cleanup_test_environment()
@@ -159,7 +159,7 @@ if pytest:
 def test_pak_core_pack_basic(pak_tester):
     """Test basic pack functionality"""
     # Pack all files with no compression
-    result = pak_tester.run_pak_core(['pack', '.', '-c', 'none', '-o', 'test.pak'])
+    result = pak_tester.run_pak4(['pack', '.', '-c', 'none', '-o', 'test.pak'])
     
     assert result['success'], f"Pack failed: {result['stderr']}"
     
@@ -188,7 +188,7 @@ def test_pak_core_pack_with_compression_levels(pak_tester):
     
     for level in compression_levels:
         output_file = f"test_{level}.pak"
-        result = pak_tester.run_pak_core(['pack', '.', '-c', level, '-o', output_file])
+        result = pak_tester.run_pak4(['pack', '.', '-c', level, '-o', output_file])
         
         assert result['success'], f"Pack with {level} compression failed: {result['stderr']}"
         
@@ -205,7 +205,7 @@ def test_pak_core_pack_with_compression_levels(pak_tester):
 def test_pak_core_pack_with_extensions_filter(pak_tester):
     """Test pack with file extension filtering"""
     # Pack only Python files
-    result = pak_tester.run_pak_core(['pack', '.', '--ext', '.py', '-o', 'python_only.pak'])
+    result = pak_tester.run_pak4(['pack', '.', '--ext', '.py', '-o', 'python_only.pak'])
     
     assert result['success'], f"Pack with extension filter failed: {result['stderr']}"
     
@@ -223,7 +223,7 @@ def test_pak_core_pack_with_extensions_filter(pak_tester):
 
 def test_pak_core_pack_with_max_tokens(pak_tester):
     """Test pack with token limit"""
-    result = pak_tester.run_pak_core(['pack', '.', '-m', '1000', '-o', 'limited.pak'])
+    result = pak_tester.run_pak4(['pack', '.', '-m', '1000', '-o', 'limited.pak'])
     
     assert result['success'], f"Pack with token limit failed: {result['stderr']}"
     
@@ -239,10 +239,10 @@ def test_pak_core_pack_with_max_tokens(pak_tester):
 def test_pak_core_list_archive(pak_tester):
     """Test list functionality"""
     # First create an archive
-    pak_tester.run_pak_core(['pack', '.', '-o', 'test.pak'])
+    pak_tester.run_pak4(['pack', '.', '-o', 'test.pak'])
     
     # List archive contents
-    result = pak_tester.run_pak_core(['list', 'test.pak'])
+    result = pak_tester.run_pak4(['list', 'test.pak'])
     
     assert result['success'], f"List failed: {result['stderr']}"
     
@@ -255,10 +255,10 @@ def test_pak_core_list_archive(pak_tester):
 def test_pak_core_list_detailed(pak_tester):
     """Test detailed list functionality"""
     # First create an archive
-    pak_tester.run_pak_core(['pack', '.', '-o', 'test.pak'])
+    pak_tester.run_pak4(['pack', '.', '-o', 'test.pak'])
     
     # List archive contents with details
-    result = pak_tester.run_pak_core(['list-detailed', 'test.pak'])
+    result = pak_tester.run_pak4(['list-detailed', 'test.pak'])
     
     assert result['success'], f"List-detailed failed: {result['stderr']}"
     
@@ -269,10 +269,10 @@ def test_pak_core_list_detailed(pak_tester):
 def test_pak_core_verify_archive(pak_tester):
     """Test verify functionality"""
     # First create an archive
-    pak_tester.run_pak_core(['pack', '.', '-o', 'test.pak'])
+    pak_tester.run_pak4(['pack', '.', '-o', 'test.pak'])
     
     # Verify archive
-    result = pak_tester.run_pak_core(['verify', 'test.pak'])
+    result = pak_tester.run_pak4(['verify', 'test.pak'])
     
     assert result['success'], f"Verify failed: {result['stderr']}"
 
@@ -280,14 +280,14 @@ def test_pak_core_verify_archive(pak_tester):
 def test_pak_core_extract_archive(pak_tester):
     """Test extract functionality"""
     # First create an archive
-    pak_tester.run_pak_core(['pack', '.', '-o', 'test.pak'])
+    pak_tester.run_pak4(['pack', '.', '-o', 'test.pak'])
     
     # Create extraction directory
     extract_dir = pak_tester.test_dir / "extracted"
     extract_dir.mkdir()
     
     # Extract archive
-    result = pak_tester.run_pak_core(['extract', 'test.pak', '-d', str(extract_dir)])
+    result = pak_tester.run_pak4(['extract', 'test.pak', '-d', str(extract_dir)])
     
     assert result['success'], f"Extract failed: {result['stderr']}"
     
@@ -305,14 +305,14 @@ def test_pak_core_extract_archive(pak_tester):
 def test_pak_core_extract_with_pattern(pak_tester):
     """Test extract with pattern filtering"""
     # First create an archive
-    pak_tester.run_pak_core(['pack', '.', '-o', 'test.pak'])
+    pak_tester.run_pak4(['pack', '.', '-o', 'test.pak'])
     
     # Create extraction directory
     extract_dir = pak_tester.test_dir / "extracted_filtered"
     extract_dir.mkdir()
     
     # Extract only Python files
-    result = pak_tester.run_pak_core(['extract', 'test.pak', '-d', str(extract_dir), '-p', '.*\\.py$'])
+    result = pak_tester.run_pak4(['extract', 'test.pak', '-d', str(extract_dir), '-p', '.*\\.py$'])
     
     assert result['success'], f"Extract with pattern failed: {result['stderr']}"
     
@@ -346,7 +346,7 @@ def subtract(a, b):
 ''')
     
     # Extract diff
-    result = pak_tester.run_pak_core(['extract-diff', str(original_file), str(modified_file), '-o', 'changes.diff'])
+    result = pak_tester.run_pak4(['extract-diff', str(original_file), str(modified_file), '-o', 'changes.diff'])
     
     assert result['success'], f"Extract-diff failed: {result['stderr']}"
     
@@ -373,7 +373,7 @@ def hello():
 ''')
     
     # Verify diff
-    result = pak_tester.run_pak_core(['verify-diff', str(diff_file)])
+    result = pak_tester.run_pak4(['verify-diff', str(diff_file)])
     
     assert result['success'], f"Verify-diff failed: {result['stderr']}"
 
@@ -381,22 +381,22 @@ def hello():
 def test_pak_core_error_handling(pak_tester):
     """Test error handling for invalid inputs"""
     # Test with non-existent archive
-    result = pak_tester.run_pak_core(['list', 'non_existent.pak'])
+    result = pak_tester.run_pak4(['list', 'non_existent.pak'])
     assert not result['success'], "Should fail with non-existent archive"
     
     # Test with invalid compression level
-    result = pak_tester.run_pak_core(['pack', '.', '-c', 'invalid'])
+    result = pak_tester.run_pak4(['pack', '.', '-c', 'invalid'])
     assert not result['success'], "Should fail with invalid compression level"
     
     # Test pack with non-existent directory
-    result = pak_tester.run_pak_core(['pack', 'non_existent_dir'])
+    result = pak_tester.run_pak4(['pack', 'non_existent_dir'])
     assert not result['success'], "Should fail with non-existent directory"
 
 
 def test_pak_core_quiet_mode(pak_tester):
     """Test quiet mode functionality"""
     # Pack with quiet mode
-    result = pak_tester.run_pak_core(['pack', '.', '-q', '-o', 'quiet_test.pak'])
+    result = pak_tester.run_pak4(['pack', '.', '-q', '-o', 'quiet_test.pak'])
     
     assert result['success'], f"Pack in quiet mode failed: {result['stderr']}"
     
@@ -407,7 +407,7 @@ def test_pak_core_quiet_mode(pak_tester):
 
 if __name__ == "__main__":
     # For manual testing
-    tester = PakCoreIntegrationTester()
+    tester = Pak4IntegrationTester()
     tester.setup_test_environment()
     
     print("🧪 Running pak_core.py integration tests manually...")
@@ -415,14 +415,14 @@ if __name__ == "__main__":
     try:
         # Test basic pack
         print("📦 Testing basic pack...")
-        result = tester.run_pak_core(['pack', '.', '-o', 'manual_test.pak'])
+        result = tester.run_pak4(['pack', '.', '-o', 'manual_test.pak'])
         print(f"   Pack result: {'✅ Success' if result['success'] else '❌ Failed'}")
         if not result['success']:
             print(f"   Error: {result['stderr']}")
         
         # Test list
         print("📋 Testing list...")
-        result = tester.run_pak_core(['list', 'manual_test.pak'])
+        result = tester.run_pak4(['list', 'manual_test.pak'])
         print(f"   List result: {'✅ Success' if result['success'] else '❌ Failed'}")
         if result['success']:
             print(f"   Files found: {len(result['stdout'].splitlines())}")

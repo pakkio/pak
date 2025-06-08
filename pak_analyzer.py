@@ -1,11 +1,192 @@
 import ast
+import re
 from typing import List, Dict, Any, Optional, Union # Added Union
+import ast_helper
 
-class PythonAnalyzer:
+class MultiLanguageAnalyzer:
     """
-    Analyzes Python code structure using AST for tasks like
-    AST-based compression and method diff preparation.
+    Analyzes code structure using AST for multiple languages.
+    Supports Python via built-in ast module and other languages via tree-sitter.
     """
+    
+    @staticmethod
+    def compress_with_ast(content: str, language: str, level: str = "aggressive") -> str:
+        """
+        Compresses code using AST analysis.
+        For Python: uses built-in ast module
+        For other languages: delegates to ast_helper.py with tree-sitter
+        
+        Args:
+            content: Source code content
+            language: Language identifier (python, javascript, java, etc.)
+            level: Compression level (light, medium, aggressive)
+        
+        Returns:
+            Compressed code content
+        """
+        if language == "python":
+            # Use Python-specific AST compression
+            if level == "aggressive":
+                structure = MultiLanguageAnalyzer.extract_structure(content)
+                if "error" in structure:
+                    return content  # Fallback to original on error
+                return MultiLanguageAnalyzer._format_python_structure(structure)
+            else:
+                # For light/medium, delegate to ast_helper for consistency
+                return MultiLanguageAnalyzer._compress_via_ast_helper(content, language, level)
+        else:
+            # Use tree-sitter via ast_helper for all non-Python languages
+            return MultiLanguageAnalyzer._compress_via_ast_helper(content, language, level)
+    
+    @staticmethod
+    def _compress_via_ast_helper(content: str, language: str, level: str) -> str:
+        """
+        Calls ast_helper functions directly instead of subprocess for better integration.
+        Fallback to regex-based compression if tree-sitter fails.
+        """
+        try:
+            # Get tree-sitter language object
+            language_obj = ast_helper.get_language_object(language)
+            if not language_obj:
+                return MultiLanguageAnalyzer._fallback_compression(content, language, level)
+            
+            # Parse with tree-sitter
+            from tree_sitter import Parser
+            parser = Parser()
+            parser.set_language(language_obj)
+            source_bytes = content.encode('utf-8')
+            tree = parser.parse(source_bytes)
+            
+            # Apply compression based on level
+            if level == "aggressive":
+                result = ast_helper.extract_api_only(tree, source_bytes)
+            elif level == "medium":
+                result = ast_helper.extract_signatures_preview(tree, source_bytes)
+            elif level == "light":
+                result = ast_helper.extract_clean_code(tree, source_bytes)
+            else:
+                return content
+                
+            # If AST processing succeeded (result changed), return it
+            if result != content:
+                return result
+            else:
+                return MultiLanguageAnalyzer._fallback_compression(content, language, level)
+                
+        except (ImportError, Exception):
+            # Tree-sitter not available or failed, use fallback
+            return MultiLanguageAnalyzer._fallback_compression(content, language, level)
+    
+    @staticmethod
+    def _fallback_compression(content: str, language: str, level: str) -> str:
+        """
+        Regex-based compression fallback for when tree-sitter is unavailable.
+        """
+        if level == "light":
+            # Remove single-line comments for common languages
+            if language in ['javascript', 'java', 'c', 'cpp', 'csharp', 'go', 'rust']:
+                # Remove // comments
+                content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
+            elif language in ['python']:
+                # Remove # comments (but preserve shebangs)
+                lines = content.split('\n')
+                result_lines = []
+                for line in lines:
+                    if line.strip().startswith('#!'):  # Preserve shebangs
+                        result_lines.append(line)
+                    else:
+                        result_lines.append(re.sub(r'#.*$', '', line))
+                content = '\n'.join(result_lines)
+            
+            # Remove empty lines
+            content = '\n'.join(line for line in content.split('\n') if line.strip())
+            return content + f'\n# ... (Light compression via regex - {language})'
+            
+        elif level == "medium":
+            # Remove comments and docstrings
+            content = MultiLanguageAnalyzer._fallback_compression(content, language, "light")
+            if language in ['javascript', 'java']:
+                # Remove /* */ comments
+                content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+            elif language == 'python':
+                # Remove triple-quoted strings (basic regex)
+                content = re.sub(r'""".*?"""', '', content, flags=re.DOTALL)
+                content = re.sub(r"'''.*?'''", '', content, flags=re.DOTALL)
+            return content + f'\n# ... (Medium compression via regex - {language})'
+            
+        elif level == "aggressive":
+            # Extract function/class signatures only
+            if language == 'javascript':
+                # Extract class and function declarations
+                signatures = []
+                for line in content.split('\n'):
+                    line = line.strip()
+                    if (line.startswith('class ') or line.startswith('function ') or 
+                        line.startswith('async function ') or 'function' in line or
+                        line.startswith('import ') or line.startswith('export ')):
+                        signatures.append(line.split('{')[0].strip() + ' { ... }')
+                if signatures:
+                    return '\n'.join(signatures) + f'\n# ... (Aggressive compression via regex - {language})'
+                    
+            elif language == 'java':
+                # Extract class, method, and import declarations
+                signatures = []
+                for line in content.split('\n'):
+                    line = line.strip()
+                    if (line.startswith('public ') or line.startswith('private ') or 
+                        line.startswith('protected ') or line.startswith('class ') or
+                        line.startswith('interface ') or line.startswith('import ')):
+                        signatures.append(line.split('{')[0].strip() + ' { ... }')
+                if signatures:
+                    return '\n'.join(signatures) + f'\n# ... (Aggressive compression via regex - {language})'
+            
+            # Fallback to medium compression
+            return MultiLanguageAnalyzer._fallback_compression(content, language, "medium")
+        
+        return content
+    
+    @staticmethod
+    def _format_python_structure(structure: Dict[str, Any]) -> str:
+        """
+        Formats Python structure dictionary into compressed code representation.
+        """
+        lines = []
+        
+        # Add imports
+        if structure.get("imports"):
+            lines.extend(structure["imports"])
+            lines.append("")  # Blank line after imports
+        
+        # Add top-level variables
+        if structure.get("variables"):
+            for var in structure["variables"]:
+                lines.append(f"{var} = ...")
+            lines.append("")
+        
+        # Add functions
+        if structure.get("functions"):
+            for func_sig in structure["functions"]:
+                lines.append(f"{func_sig}:")
+                lines.append("    ...")
+                lines.append("")
+        
+        # Add classes
+        if structure.get("classes"):
+            for class_info in structure["classes"]:
+                lines.append(class_info["signature"])
+                
+                # Add class variables
+                for var in class_info.get("variables", []):
+                    lines.append(f"    {var} = ...")
+                
+                # Add methods
+                for method_sig in class_info.get("methods", []):
+                    lines.append(f"    {method_sig}:")
+                    lines.append("        ...")
+                
+                lines.append("")
+        
+        return "\n".join(lines) + "\n# ... (Structure extracted via AST - pak_analyzer.py)"
 
     @staticmethod
     def _get_node_source_segment(node: ast.AST, content_lines: List[str]) -> str:
@@ -176,7 +357,7 @@ class PythonAnalyzer:
 
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                source_segment = PythonAnalyzer._get_node_source_segment(node, content_lines)
+                source_segment = MultiLanguageAnalyzer._get_node_source_segment(node, content_lines)
 
                 # Construct a more detailed signature if possible
                 args_strs = []
@@ -212,8 +393,8 @@ class PythonAnalyzer:
         Returns a list of diffs (added, removed, modified).
         Modification is detected by changes in the normalized source code.
         """
-        old_methods_list = PythonAnalyzer.extract_methods(old_content)
-        new_methods_list = PythonAnalyzer.extract_methods(new_content)
+        old_methods_list = MultiLanguageAnalyzer.extract_methods(old_content)
+        new_methods_list = MultiLanguageAnalyzer.extract_methods(new_content)
 
         # Create dictionaries keyed by method name for easier lookup
         # For methods with same name in different classes, this would need refinement (e.g. key by "ClassName.method_name")
@@ -258,6 +439,9 @@ class PythonAnalyzer:
                     "old_signature": old_method_data["signature"]
                 })
         return diff_results
+
+# Backward compatibility alias
+PythonAnalyzer = MultiLanguageAnalyzer
 
 if __name__ == '__main__':
     sample_code_v1 = """
@@ -315,17 +499,17 @@ def another_func(): # Added function
     pass
 """
     print("--- Structure V1 ---")
-    print(PythonAnalyzer.extract_structure(sample_code_v1))
+    print(MultiLanguageAnalyzer.extract_structure(sample_code_v1))
     print("\n--- Methods V1 ---")
-    for m in PythonAnalyzer.extract_methods(sample_code_v1): print(m)
+    for m in MultiLanguageAnalyzer.extract_methods(sample_code_v1): print(m)
 
     print("\n--- Structure V2 ---")
-    print(PythonAnalyzer.extract_structure(sample_code_v2))
+    print(MultiLanguageAnalyzer.extract_structure(sample_code_v2))
     print("\n--- Methods V2 ---")
-    for m in PythonAnalyzer.extract_methods(sample_code_v2): print(m)
+    for m in MultiLanguageAnalyzer.extract_methods(sample_code_v2): print(m)
 
     print("\n--- Method Diffs (V1 -> V2) ---")
-    diffs = PythonAnalyzer.compare_methods(sample_code_v1, sample_code_v2)
+    diffs = MultiLanguageAnalyzer.compare_methods(sample_code_v1, sample_code_v2)
     for d in diffs:
         print(f"Type: {d['type']}, Name: {d['method_name']}")
         if 'old_source' in d: print(f"  Old Signature: {d.get('old_signature')}")
