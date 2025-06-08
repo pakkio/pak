@@ -1,4 +1,4 @@
-# Pak3: il tool che ti salva dall'inferno del copia-incolla con gli LLM
+# pak4.py: il tool che ti salva dall'inferno del copia-incolla con gli LLM
 
 ## Il problema che tutti abbiamo (ma nessuno ammette)
 
@@ -16,13 +16,13 @@ Sei un programmatore nel 2025. Usi Claude, ChatGPT, o qualsiasi altro LLM **ogni
 
 **Questo 20 volte al giorno.**
 
-Se ti riconosci in questa descrizione, pak3 è nato per te.
+Se ti riconosci in questa descrizione, pak4.py è nato per te.
 
 ## Pak3: la soluzione che avresti dovuto inventare tu
 
 Pak3 è un tool da riga di comando che risolve **esattamente** questo problema. In modo elegante, veloce, e senza rompere le scatole.
 
-### Il workflow prima di pak3
+### Il workflow prima di pak4.py
 ```
 1. Apri file1.py → copia → incolla nel chat con "File: file1.py"
 2. Apri file2.js → copia → incolla nel chat con "File: file2.js"  
@@ -37,23 +37,23 @@ Pak3 è un tool da riga di comando che risolve **esattamente** questo problema. 
 **Errori**: Garantiti  
 **Frustrazione**: Massima
 
-### Il workflow con pak3
+### Il workflow con pak4.py
 ```bash
 # Impacchetta tutto
-pak3 --compress-level smart src/ > progetto.pak
+pak4.py --compress-level smart src/ > progetto.pak
 
 # Incolli il contenuto di progetto.pak nel chat + la tua domanda
 # LLM risponde con un nuovo file .pak
 
 # Scompatti la risposta
-pak3 --unpack risposta.pak --outdir ./updated
+pak4.py --unpack risposta.pak --outdir ./updated
 ```
 
 **Tempo**: 30 secondi  
 **Errori**: Zero  
 **Frustrazione**: Zero
 
-## Come funziona pak3 nella pratica
+## Come funziona pak4.py nella pratica
 
 ### Esempio reale: Refactoring di un componente React
 
@@ -70,7 +70,7 @@ src/
     └── formatters.js
 ```
 
-**Senza pak3:**
+**Senza pak4.py:**
 1. Apri 5 file
 2. Copia-incolla ognuno nel chat
 3. Scrivi: "Converti questo componente per usare TypeScript"
@@ -79,10 +79,10 @@ src/
 6. Rinomini i file da .js a .ts/.tsx
 7. Controlli che non hai fatto errori
 
-**Con pak3:**
+**Con pak4.py:**
 ```bash
 # Impacchetta
-pak3 --compress-level medium src/ --ext .jsx .js .css > componente.pak
+pak4.py --compress-level medium src/ --ext .jsx .js .css > componente.pak
 
 # Nel chat:
 # [incolli contenuto di componente.pak]
@@ -92,7 +92,7 @@ pak3 --compress-level medium src/ --ext .jsx .js .css > componente.pak
 # Lo salvi come typescript.pak
 
 # Scompatti
-pak3 --unpack typescript.pak --outdir ./src-updated
+pak4.py --unpack typescript.pak --outdir ./src-updated
 ```
 
 Risultato: hai una directory `src-updated/` con tutti i file convertiti, ottimizzati, e già rinominati correttamente.
@@ -103,7 +103,7 @@ Il tuo backend Node.js ha un bug che coinvolge più file. Invece di copiare manu
 
 ```bash
 # Impacchetta solo i file rilevanti
-pak3 --compress-level aggressive \
+pak4.py --compress-level aggressive \
      server.js \
      routes/auth.js \
      middleware/validation.js \
@@ -121,7 +121,7 @@ Il tuo collega ti chiede di revieware una feature. Invece di mandare link GitHub
 
 ```bash
 # Impacchetta la feature
-pak3 --compress-level light feature-branch/ --ext .py .sql > feature-review.pak
+pak4.py --compress-level light feature-branch/ --ext .py .sql > feature-review.pak
 ```
 
 Mandi il file `.pak` al collega, che può:
@@ -129,7 +129,7 @@ Mandi il file `.pak` al collega, che può:
 2. Scompattarlo per testare localmente
 3. Mandarlo all'LLM per analysis automatica
 
-## Perché pak3 è geniale per il workflow LLM
+## Perché pak4.py è geniale per il workflow LLM
 
 ### 1. **Formato LLM-native**
 
@@ -177,26 +177,26 @@ Pak3 non è stupido. Con `--compress-level smart`:
 ### 3. **Gestione automatica dei token**
 
 ```bash
-pak3 --compress-level smart --max-tokens 8000 huge-project/
+pak4.py --compress-level smart --max-tokens 8000 huge-project/
 ```
 
 Pak3 **prioritizza automaticamente** i file più importanti e si ferma quando raggiunge il limite di token. Non devi più contare caratteri o preoccuparti di sforare il context window.
 
 ### 4. **Fallback robusto**
 
-Se pak3 non riesce a fare parsing AST di un file (per qualsiasi motivo), **non crasha**. Passa automaticamente alla compressione testuale. Il workflow non si interrompe mai.
+Se pak4.py non riesce a fare parsing AST di un file (per qualsiasi motivo), **non crasha**. Passa automaticamente alla compressione testuale. Il workflow non si interrompe mai.
 
 ## Setup: 5 minuti per sempre
 
 ### Installazione
 ```bash
-# Scarica pak3
-curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak3
-chmod +x pak3
-sudo mv pak3 /usr/local/bin/
+# Scarica pak4.py
+curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak4.py
+chmod +x pak4.py
+sudo mv pak4.py /usr/local/bin/
 
 # Verifica che funzioni
-pak3 --version
+pak4.py --version
 ```
 
 ### Dipendenze (opzionali ma raccomandate)
@@ -205,50 +205,50 @@ pak3 --version
 pip3 install --user tree-sitter tree-sitter-languages tree-sitter-python
 
 # Verifica supporto AST
-pak3 --ast-info
+pak4.py --ast-info
 ```
 
-Se non installi le dipendenze Python, pak3 **funziona comunque** con compressione testuale. L'AST è un bonus, non un requisito.
+Se non installi le dipendenze Python, pak4.py **funziona comunque** con compressione testuale. L'AST è un bonus, non un requisito.
 
 ## I comandi che usi davvero
 
 ### Impacchettamento base
 ```bash
 # Tutto il progetto
-pak3 src/ > progetto.pak
+pak4.py src/ > progetto.pak
 
 # Solo file specifici
-pak3 main.py utils.py config.yaml > core.pak
+pak4.py main.py utils.py config.yaml > core.pak
 
 # Solo certi tipi di file
-pak3 --ext .py .md ./mio-progetto > python-docs.pak
+pak4.py --ext .py .md ./mio-progetto > python-docs.pak
 ```
 
 ### Compressione intelligente
 ```bash
 # Leggera: rimuove spazi vuoti e commenti banali
-pak3 --compress-level light src/ > light.pak
+pak4.py --compress-level light src/ > light.pak
 
 # Media: mantiene struttura ma comprime implementazioni
-pak3 --compress-level medium src/ > medium.pak
+pak4.py --compress-level medium src/ > medium.pak
 
 # Aggressiva: solo signature e API pubbliche
-pak3 --compress-level aggressive src/ > minimal.pak
+pak4.py --compress-level aggressive src/ > minimal.pak
 
 # Smart: sceglie automaticamente in base all'importanza del file
-pak3 --compress-level smart --max-tokens 12000 src/ > smart.pak
+pak4.py --compress-level smart --max-tokens 12000 src/ > smart.pak
 ```
 
 ### Scompattamento
 ```bash
 # Nella directory corrente
-pak3 --unpack risposta.pak
+pak4.py --unpack risposta.pak
 
 # In una directory specifica
-pak3 --unpack risposta.pak --outdir ./nuova-versione
+pak4.py --unpack risposta.pak --outdir ./nuova-versione
 
 # Verifica cosa c'è dentro prima di scompattare
-pak3 --ls risposta.pak
+pak4.py --ls risposta.pak
 ```
 
 ## Casi d'uso quotidiani
@@ -283,22 +283,22 @@ pak3 --ls risposta.pak
 **Pak3 vince sempre.** Non c'è gara.
 
 ### vs. Script personalizzato
-Se hai già uno script che fa la stessa cosa e sei soddisfatto, continua a usarlo. Ma pak3 probabilmente gestisce più edge cases e linguaggi del tuo script.
+Se hai già uno script che fa la stessa cosa e sei soddisfatto, continua a usarlo. Ma pak4.py probabilmente gestisce più edge cases e linguaggi del tuo script.
 
 ### vs. GitHub + link agli LLM
 - **Pro GitHub**: Nessun setup locale
-- **Pro pak3**: Funziona offline, più veloce, controllo totale sul context
+- **Pro pak4.py**: Funziona offline, più veloce, controllo totale sul context
 
 ### vs. Tool enterprise (LLMLingua, ecc.)
 - **Pro enterprise**: Compressione più sofisticata matematicamente
-- **Pro pak3**: Gratis, offline, zero setup, zero dipendenze da API
+- **Pro pak4.py**: Gratis, offline, zero setup, zero dipendenze da API
 
-Per l'uso quotidiano personale, pak3 **vince per praticità**.
+Per l'uso quotidiano personale, pak4.py **vince per praticità**.
 
 ## Limiti onesti
 
 ### 1. **Non è magia**
-Se il tuo progetto ha 100k linee di codice, pak3 non può comprimerlo in 1000 token mantenendo tutto il context. Devi essere selettivo.
+Se il tuo progetto ha 100k linee di codice, pak4.py non può comprimerlo in 1000 token mantenendo tutto il context. Devi essere selettivo.
 
 ### 2. **Dipendenze Python per AST**
 Per la compressione avanzata serve Python + tree-sitter. Su ambienti molto ristretti potresti dover usare solo compressione testuale.
@@ -307,31 +307,31 @@ Per la compressione avanzata serve Python + tree-sitter. Su ambienti molto ristr
 Pak3 ti aiuta a **preparare** il context per l'LLM, ma devi comunque sapere **cosa chiedere** e **come interpretare** le risposte.
 
 ### 4. **Funziona meglio su progetti strutturati**
-Se il tuo codice è un casino totale senza structure, pak3 non può fare miracoli nella prioritizzazione.
+Se il tuo codice è un casino totale senza structure, pak4.py non può fare miracoli nella prioritizzazione.
 
 ## Trucchi e tips
 
 ### 1. **Usa alias per workflow comuni**
 ```bash
 # Nel tuo .bashrc/.zshrc
-alias pak-quick='pak3 --compress-level smart --max-tokens 8000'
-alias pak-review='pak3 --compress-level medium --ext .py .js .ts'
-alias pak-minimal='pak3 --compress-level aggressive'
+alias pak-quick='pak4.py --compress-level smart --max-tokens 8000'
+alias pak-review='pak4.py --compress-level medium --ext .py .js .ts'
+alias pak-minimal='pak4.py --compress-level aggressive'
 ```
 
 ### 2. **Combina con altri tool**
 ```bash
 # Solo file modificati di recente
-git diff --name-only HEAD~5 | xargs pak3 > recent-changes.pak
+git diff --name-only HEAD~5 | xargs pak4.py > recent-changes.pak
 
 # Solo file che contengono una certa funzione  
-grep -r "getUserData" src/ | cut -d: -f1 | sort -u | xargs pak3 > user-data-logic.pak
+grep -r "getUserData" src/ | cut -d: -f1 | sort -u | xargs pak4.py > user-data-logic.pak
 ```
 
 ### 3. **Template per richieste comuni**
 Crea file template che includi nelle richieste:
 ```bash
-pak3 src/ > codebase.pak
+pak4.py src/ > codebase.pak
 cat codebase.pak refactoring-prompt-template.txt > full-request.txt
 ```
 
@@ -339,7 +339,7 @@ cat codebase.pak refactoring-prompt-template.txt > full-request.txt
 ```bash
 # Sempre backup prima di scompattare su codice esistente
 cp -r src/ src-backup/
-pak3 --unpack new-version.pak --outdir src/
+pak4.py --unpack new-version.pak --outdir src/
 ```
 
 ## Conclusione: il tool che non sapevi di volere

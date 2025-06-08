@@ -29,7 +29,7 @@ Pak non è un singolo strumento, ma una **famiglia di tool** che risolve lo stes
 - **Compressione intelligente ma pragmatica**: rimuove spazi vuoti, commenti banali, ottimizza per la leggibilità dell'LLM
 - **Perfetto per**: workflow quotidiano, ambienti corporate con restrizioni, situazioni "voglio che funzioni e basta"
 
-### **`pak3`** - La via della precisione chirurgica
+### **`pak4.py`** - La via della precisione chirurgica
 
 *"Lavoro intensivamente con LLM costosi e ogni token conta"*
 
@@ -55,16 +55,16 @@ pak server.js routes/auth.js middleware/validation.js > bug-context.pak
 **Complessità**: Zero  
 **Efficacia**: Perfetta per il 90% dei casi
 
-### Scenario 2: Refactoring importante (usa `pak3`)
+### Scenario 2: Refactoring importante (usa `pak4.py`)
 
 Devi convertire un'intera app React da class components a hooks:
 
 ```bash
 # Versione completa
-pak3 --compress-level smart --max-tokens 12000 src/ > refactoring.pak
+pak4.py --compress-level smart --max-tokens 12000 src/ > refactoring.pak
 
 # Versione concisa (identica)
-pak3 -cs -m 12000 src/ -o refactoring.pak
+pak4.py -cs -m 12000 src/ -o refactoring.pak
 
 # L'LLM riceve:
 # - Struttura completa del progetto
@@ -100,35 +100,35 @@ sudo mv pak /usr/local/bin/
 
 **Done.** Zero dipendenze, funziona ovunque.
 
-### Per la potenza (`pak3`)
+### Per la potenza (`pak4.py`)
 
 ```bash
-# Scarica pak3
-curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak3
+# Scarica pak4.py
+curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak4.py
 curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak_core.py
-chmod +x pak3
-sudo mv pak3 pak_core.py /usr/local/bin/
+chmod +x pak4.py
+sudo mv pak4.py pak_core.py /usr/local/bin/
 
 # Installa le dipendenze per l'analisi AST (opzionale ma raccomandato)
 pip3 install --user tree-sitter tree-sitter-languages tree-sitter-python
 
 # Verifica che tutto funzioni
-pak3 --ast-info
+pak4.py --ast-info
 ```
 
-**Note**: Se non installi le dipendenze Python, pak3 **fallback automaticamente** alla compressione testuale. Non si rompe mai.
+**Note**: Se non installi le dipendenze Python, pak4.py **fallback automaticamente** alla compressione testuale. Non si rompe mai.
 
 ## Cheat sheet: sintassi rapida per l'uso quotidiano
 
 ### Pak3 - Comandi essenziali
 ```bash
 # Pattern più comuni (memorizza questi!)
-pak3 . -c2 -o project.pak           # Tutto, medium compression
-pak3 src/ -cs -m 8000              # Smart mode, budget 8k
-pak3 -c3 -t py,md . -o minimal.pak # Solo Python/Markdown, aggressive
-pak3 -l archive.pak                # Lista contenuti
-pak3 -x archive.pak -d extracted/  # Estrai tutto
-pak3 -x archive.pak -p "test.*"    # Estrai solo test files
+pak4.py . -c2 -o project.pak           # Tutto, medium compression
+pak4.py src/ -cs -m 8000              # Smart mode, budget 8k
+pak4.py -c3 -t py,md . -o minimal.pak # Solo Python/Markdown, aggressive
+pak4.py -l archive.pak                # Lista contenuti
+pak4.py -x archive.pak -d extracted/  # Estrai tutto
+pak4.py -x archive.pak -p "test.*"    # Estrai solo test files
 
 # Livelli compressione shorthand
 -c0  # none (tutto)
@@ -180,21 +180,21 @@ pak --unpack risposta.pak
 
 ```bash
 # Sintassi completa vs. forma breve (equivalenti)
-pak3 --compress-level smart --max-tokens 12000 src/ > optimized.pak
-pak3 -cs -m 12000 src/ > optimized.pak
+pak4.py --compress-level smart --max-tokens 12000 src/ > optimized.pak
+pak4.py -cs -m 12000 src/ > optimized.pak
 
 # Solo API surface (per code review)
-pak3 --compress-level aggressive backend/ --ext .py .sql > api-review.pak
-pak3 -c3 -t py,sql backend/ > api-review.pak
+pak4.py --compress-level aggressive backend/ --ext .py .sql > api-review.pak
+pak4.py -c3 -t py,sql backend/ > api-review.pak
 
 # Debug con prioritizzazione automatica e output automatico
-pak3 -cs -m 8000 -o debug-context.pak main.py utils/ config/
+pak4.py -cs -m 8000 -o debug-context.pak main.py utils/ config/
 
 # Estrazione con filtri regex
-pak3 -x response.pak -p ".*test.*" -d ./tests-only
+pak4.py -x response.pak -p ".*test.*" -d ./tests-only
 
 # Analisi dettagliata del contenuto
-pak3 -l -p ".*\\.py$" complex-project.pak
+pak4.py -l -p ".*\\.py$" complex-project.pak
 
 # Quick reference comandi brevi:
 # -c[0-3,s]  : compressione (0=none, 1=light, 2=medium, 3=aggressive, s=smart)
@@ -215,7 +215,7 @@ pak3 -l -p ".*\\.py$" complex-project.pak
 
 La maggior parte dei progetti open source cade nella **feature creep**: iniziano semplici, aggiungono funzionalità per ogni caso d'uso, e alla fine diventano complessi e fragili.
 
-Noi abbiamo fatto il contrario: **cristallizzato la semplicità** in `pak`, e **canalizzato la complessità** in `pak3`.
+Noi abbiamo fatto il contrario: **cristallizzato la semplicità** in `pak`, e **canalizzato la complessità** in `pak4.py`.
 
 ### Quando usare cosa
 
@@ -226,7 +226,7 @@ Noi abbiamo fatto il contrario: **cristallizzato la semplicità** in `pak`, e **
 - Preferisci affidabilità a ottimizzazione estrema
 - Non hai voglia di pensare a dipendenze
 
-**Usa `pak3` quando**:
+**Usa `pak4.py` quando**:
 - Lavori con LLM costosi intensivamente
 - Gestisci progetti complessi (> 100 file)
 - Ogni token risparmiato ha valore economico
@@ -240,36 +240,36 @@ Noi abbiamo fatto il contrario: **cristallizzato la semplicità** in `pak`, e **
 ```bash
 # Nel tuo .bashrc/.zshrc - versioni ultra-concise
 alias pak-quick='pak -c2 -m 8000'  # medium compression, 8k tokens
-alias pak3-smart='pak3 -cs -m 12000'  # smart mode, 12k budget
-alias pak3-mini='pak3 -c3 -m 6000'   # aggressive, 6k budget
-alias pak3-review='pak3 -c2 -t py,js,ts'  # code review setup
+alias pak4.py-smart='pak4.py -cs -m 12000'  # smart mode, 12k budget
+alias pak4.py-mini='pak4.py -c3 -m 6000'   # aggressive, 6k budget
+alias pak4.py-review='pak4.py -c2 -t py,js,ts'  # code review setup
 
 # Template per situazioni comuni
 alias pak-bug='pak -c2'  # debug rapido
-alias pak-refactor='pak3 -cs -m 15000'  # refactoring complesso
-alias pak-deploy='pak3 -c1 -t py,sql,yml'  # deploy prep
+alias pak-refactor='pak4.py -cs -m 15000'  # refactoring complesso
+alias pak-deploy='pak4.py -c1 -t py,sql,yml'  # deploy prep
 ```
 
 ### Quick commands per situazioni frecuenti
 
 ```bash
 # "Ho bisogno di tutto, subito, formato standard"
-pak3 . -c2 -o project.pak
+pak4.py . -c2 -o project.pak
 
 # "Solo Python e Markdown, aggressive compression"
-pak3 src/ -c3 -t py,md -o minimal.pak
+pak4.py src/ -c3 -t py,md -o minimal.pak
 
 # "Smart mode con budget preciso per GPT-4"
-pak3 . -cs -m 8000 -o gpt4-ready.pak
+pak4.py . -cs -m 8000 -o gpt4-ready.pak
 
 # "Vediamo cosa c'è in questo pak senza scompattare"
-pak3 -l archive.pak
+pak4.py -l archive.pak
 
 # "Estrai solo i test"
-pak3 -x archive.pak -p "test.*" -d tests/
+pak4.py -x archive.pak -p "test.*" -d tests/
 
 # "Verifica rapidamente se il pak è valido"
-pak3 -v archive.pak
+pak4.py -v archive.pak
 ```
 
 ### Integrazione con Git
@@ -279,7 +279,7 @@ pak3 -v archive.pak
 git diff --name-only HEAD~5 | xargs pak > recent-changes.pak
 
 # Staging area per review
-git diff --cached --name-only | xargs pak3 --compress-level smart > staging-review.pak
+git diff --cached --name-only | xargs pak4.py --compress-level smart > staging-review.pak
 ```
 
 ### Template per richieste ricorrenti
@@ -287,7 +287,7 @@ git diff --cached --name-only | xargs pak3 --compress-level smart > staging-revi
 ```bash
 # Crea template riutilizzabili
 echo "Analizza questo codice per problemi di performance e security:" > review-template.txt
-pak3 --compress-level medium src/ >> review-template.txt
+pak4.py --compress-level medium src/ >> review-template.txt
 ```
 
 ## Casi d'uso reali (testati sul campo)
@@ -295,7 +295,7 @@ pak3 --compress-level medium src/ >> review-template.txt
 ### 1. **Code review distribuito**
 *"Il collega remoto deve revieware una feature"*
 ```bash
-pak3 --compress-level light feature-branch/ > feature-review.pak
+pak4.py --compress-level light feature-branch/ > feature-review.pak
 # Mandi il .pak via Slack, il collega può leggerlo o scompattarlo localmente
 ```
 
@@ -313,7 +313,7 @@ pak --compress-level medium \
 ### 3. **Migrazione guidata**
 *"Converto da Python 3.8 a 3.12"*
 ```bash
-pak3 --compress-level smart --max-tokens 15000 \
+pak4.py --compress-level smart --max-tokens 15000 \
      src/ requirements.txt setup.py > migration-context.pak
 # L'LLM vede struttura + dipendenze + codice prioritizzato
 ```
@@ -321,7 +321,7 @@ pak3 --compress-level smart --max-tokens 15000 \
 ### 4. **Ottimizzazione performance**
 *"Questi componenti React renderizzano troppo"*
 ```bash
-pak3 --compress-level aggressive \
+pak4.py --compress-level aggressive \
      --ext .jsx .js \
      src/components/ > performance-review.pak
 # Solo API surface dei componenti, focus sulla logica di rendering
