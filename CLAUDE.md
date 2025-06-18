@@ -250,3 +250,37 @@ The codebase follows a modular pattern where `pak_core.py` orchestrates speciali
 - pak4.py is version 4.2.0+ with full feature set
 - Legacy pak3/pak4 bash scripts are deprecated
 - Backward compatibility maintained across versions
+
+## Standalone Executables
+
+From version 4, you can use `pak4` and `ast_helper` as standalone executables (no Python required) by copying them to `~/bin`:
+
+```bash
+cp dist/pak4 ~/bin/
+cp dist/ast_helper ~/bin/
+```
+Ensure `~/bin` is in your `$PATH`.
+
+You can now run:
+
+```bash
+pak4 ...
+ast_helper ...
+```
+
+These executables bundle all dependencies (including tree-sitter for AST analysis) and work on any compatible Linux system.
+
+### Build & Deployment
+
+To build the standalone executables, use Poetry and PyInstaller:
+
+```bash
+poetry run pyinstaller --onefile pak4.py
+poetry run pyinstaller --onefile ast_helper.py
+```
+The executables will be created in the `dist/` directory. Copy them to `~/bin` as shown above.
+
+### Troubleshooting
+- Make sure the files are executable: `chmod +x ~/bin/pak4 ~/bin/ast_helper`
+- Check that `~/bin` is in your `$PATH`
+- If you encounter issues with PyInstaller, rebuild as above

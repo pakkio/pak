@@ -118,6 +118,36 @@ pak4.py --ast-info
 
 **Note**: Se non installi le dipendenze Python, pak4.py **fallback automaticamente** alla compressione testuale. Non si rompe mai.
 
+## Esecuzione come eseguibili standalone
+
+Dalla versione 4, puoi usare pak4 e ast_helper come eseguibili standalone (senza Python installato) copiandoli in `~/bin`:
+
+```bash
+cp dist/pak4 ~/bin/
+cp dist/ast_helper ~/bin/
+```
+Assicurati che `~/bin` sia nel tuo `$PATH`.
+
+Ora puoi lanciare:
+
+```bash
+pak4 ...
+ast_helper ...
+```
+
+Questi eseguibili includono tutte le dipendenze (incluso tree-sitter per l'analisi AST) e funzionano su qualsiasi sistema Linux compatibile.
+
+## Troubleshooting
+
+Se riscontri errori:
+- Verifica che i permessi siano corretti: `chmod +x ~/bin/pak4 ~/bin/ast_helper`
+- Controlla che `~/bin` sia nel tuo `$PATH`
+- In caso di problemi con PyInstaller, ricostruisci con:
+  ```bash
+  poetry run pyinstaller --onefile pak4.py
+  poetry run pyinstaller --onefile ast_helper.py
+  ```
+
 ## Cheat sheet: sintassi rapida per l'uso quotidiano
 
 ### Pak3 - Comandi essenziali
