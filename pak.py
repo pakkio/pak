@@ -449,9 +449,10 @@ def execute_pack_command(args, compression_level, extensions):
     
     # Create archive
     pak = PakArchive(compression_level, args.max_tokens, args.quiet)
-    if output_path:
-        cache_mgr = CacheManager(output_path)
-        pak.set_cache_manager(cache_mgr)
+    # Always create cache manager for semantic compression to avoid repeated LLM calls
+    cache_identifier = output_path if output_path else f"stdout_{hash(tuple(collected_files))}"
+    cache_mgr = CacheManager(cache_identifier, args.quiet)
+    pak.set_cache_manager(cache_mgr)
     
     for file_path in collected_files:
         try:
