@@ -30,48 +30,14 @@ except ImportError:
     requests = None # Define requests as None if import fails
 
 class TokenCounter:
-    """Accurate token counter using tiktoken for OpenAI-compatible token counting."""
-    
-    # Cache the encoding to avoid repeated initialization
-    _encoding = None
-    
-    @classmethod
-    def _get_encoding(cls):
-        """Get tiktoken encoding, with fallback to heuristic if tiktoken unavailable."""
-        if cls._encoding is None:
-            try:
-                import tiktoken
-                # Use cl100k_base encoding (GPT-4, GPT-3.5-turbo)
-                cls._encoding = tiktoken.get_encoding("cl100k_base")
-            except ImportError:
-                cls._encoding = "fallback"  # Flag for heuristic mode
-        return cls._encoding
-    
+    """Token counter using a simple heuristic: 3 chars = 1 token (tiktoken disabled)."""
+
     @staticmethod
     def count_tokens(content: str, file_type: str = "text") -> int:
         if not content:
             return 0
-            
-        encoding = TokenCounter._get_encoding()
-        
-        if encoding == "fallback":
-            # Fallback to original heuristic if tiktoken not available
-            words = len(content.split())
-            chars = len(content)
-            if file_type in ["python", "javascript", "typescript", "java", "c", "cpp", "csharp", "go", "rust"]:
-                return int((words * 1.3 + chars * 0.25) / 3) # Heuristic for code
-            elif file_type in ["markdown", "text", "log", "html", "xml"]:
-                return int(words * 0.75 + chars * 0.1) # Heuristic for text/markup
-            else: # Generic fallback
-                return int(words * 1.0)
-        else:
-            # Use tiktoken for accurate token counting
-            try:
-                tokens = encoding.encode(content)
-                return len(tokens)
-            except Exception:
-                # Fallback to heuristic if encoding fails
-                return int(len(content.split()) * 1.3)
+        # Simple heuristic: 3 characters = 1 token
+        return max(1, len(content) // 3)
 
 class CacheManager:
     """Manages SHA-256 based caching for semantic compression results."""

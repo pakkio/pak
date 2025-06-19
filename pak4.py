@@ -3,12 +3,18 @@
 pak4.py - LLM-enhanced file archiver with semantic compression and method diff support.
 Main CLI entry point for all pak4 operations.
 """
+# import tiktoken
+# For now, tiktoken is disabled/faked. We assume 3 chars = 1 token.
+# try:
+#     tiktoken.get_encoding("cl100k_base")
+# except Exception as e:
+#     print(f"pak4: Warning: cl100k_base encoding not available: {e}", file=sys.stderr, flush=True)
 
-import sys
 import argparse
 import datetime
 import os
 import re
+import sys
 from pathlib import Path
 
 # Import from local modules
@@ -149,7 +155,7 @@ USAGE:
 
   METHOD DIFF COMMANDS:
   pak4 --diff file1.py file2.py [...] -o changes.diff  # Extract method-level diff
-  pak4 -vd changes.diff                               # Verify method diff syntax
+  pak4 -vd changes.diff                               # Verify method diff file syntax
   pak4 -ad changes.diff target_dir_or_file            # Apply method diff to files
 
 TARGETS:

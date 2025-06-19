@@ -1,7 +1,9 @@
 import ast
 import re
 from typing import List, Dict, Any, Optional, Union # Added Union
-import ast_helper
+import subprocess
+import tempfile
+import os
 
 class MultiLanguageAnalyzer:
     """
@@ -41,40 +43,24 @@ class MultiLanguageAnalyzer:
     @staticmethod
     def _compress_via_ast_helper(content: str, language: str, level: str) -> str:
         """
-        Calls ast_helper functions directly instead of subprocess for better integration.
-        Fallback to regex-based compression if tree-sitter fails.
+        Calls the frozen ast_helper binary as a subprocess for AST-based compression.
+        Fallback to regex-based compression if the binary fails.
         """
         try:
-            # Get tree-sitter language object
-            language_obj = ast_helper.get_language_object(language)
-            if not language_obj:
-                return MultiLanguageAnalyzer._fallback_compression(content, language, level)
-            
-            # Parse with tree-sitter
-            from tree_sitter import Parser
-            parser = Parser()
-            parser.set_language(language_obj)
-            source_bytes = content.encode('utf-8')
-            tree = parser.parse(source_bytes)
-            
-            # Apply compression based on level
-            if level == "aggressive":
-                result = ast_helper.extract_api_only(tree, source_bytes)
-            elif level == "medium":
-                result = ast_helper.extract_signatures_preview(tree, source_bytes)
-            elif level == "light":
-                result = ast_helper.extract_clean_code(tree, source_bytes)
-            else:
-                return content
-                
-            # If AST processing succeeded (result changed), return it
-            if result != content:
-                return result
+            # Write content to a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, mode='w', encoding='utf-8', suffix='.txt') as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            # Find ast_helper binary (assume it's in the same dir as pak4 or in PATH)
+            ast_helper_bin = os.environ.get('AST_HELPER_BIN', 'ast_helper')
+            cmd = [ast_helper_bin, '--lang', language, '--level', level, tmp_path]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            os.unlink(tmp_path)
+            if result.returncode == 0:
+                return result.stdout
             else:
                 return MultiLanguageAnalyzer._fallback_compression(content, language, level)
-                
-        except (ImportError, Exception):
-            # Tree-sitter not available or failed, use fallback
+        except Exception as e:
             return MultiLanguageAnalyzer._fallback_compression(content, language, level)
     
     @staticmethod
