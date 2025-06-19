@@ -42,7 +42,7 @@ cd pak
 poetry install
 
 # Make scripts executable
-chmod +x pak pak.py install.sh
+chmod +x pak.py install.sh
 
 # Install standalone executables (optional)
 ./install.sh
@@ -54,8 +54,8 @@ chmod +x pak pak.py install.sh
 # Pack current directory with smart compression
 ./pak.py . -c smart -m 8000 -o project.pak
 
-# Legacy syntax (backward compatible)
-./pak --compress-level smart --max-tokens 8000 . > project.pak
+# Using installed executable (after ./install.sh)
+pak . -c smart -m 8000 -o project.pak
 
 # List archive contents
 ./pak.py -l project.pak

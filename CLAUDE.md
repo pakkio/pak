@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Pak is a semantic compression tool family designed to solve the copy-paste workflow problem when working with LLMs. It packages multiple files into LLM-friendly formats and extracts modified code back to proper file structures.
 
-The repository contains two main variants:
-- **pak** (Bash script) - Simple, zero-dependency solution for basic operations
+The repository contains:
 - **pak.py** (Python CLI) - Full-featured with semantic LLM compression and method-level diff support
+- **pak** (compiled executable) - Standalone binary created from pak.py using PyInstaller
 
 ## Core Architecture
 
@@ -54,15 +54,15 @@ __PAK_DATA_<uuid>_END__
 # Install Python dependencies via Poetry (includes pytest)
 poetry install
 
-# Make bash scripts executable
-chmod +x pak pak3 pak4
+# Make scripts executable
+chmod +x pak.py install.sh
 
 # Setup environment for semantic compression (optional)
 cp .env.sample .env  # Configure OPENROUTER_API_KEY if needed
 
 # Verify installation and check tree-sitter availability
-./pak4 --version
-python3 pak_core.py --version
+./pak.py --version
+./install.sh  # Build and install standalone executables
 
 # Verify pytest setup
 poetry run pytest --version
@@ -116,16 +116,13 @@ black .
 ./pak.py -vd changes.diff                      # Verify diff syntax
 ```
 
-### Script Variants
+### Usage Options
 ```bash
-# pak - Simple bash version (zero dependencies)
-./pak src/ --compress-level medium
-
-# pak.py - Full featured Python CLI (recommended)
+# pak.py - Python CLI (development)
 ./pak.py . -c smart -m 8000 -o project.pak
 
-# Legacy pak3/pak4 bash scripts (deprecated)
-./pak3 --compress-level smart --max-tokens 8000 src/
+# pak - Compiled executable (after ./install.sh)
+pak . -c smart -m 8000 -o project.pak
 ```
 
 ## Key Development Patterns
