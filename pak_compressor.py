@@ -145,7 +145,7 @@ class SemanticCompressor:
         # Truncate very long content to fit within reasonable prompt limits for the LLM
         # This is a basic truncation; smarter chunking might be needed for huge files.
         # Max prompt content length (heuristic, depends on LLM context window)
-        MAX_CONTENT_PROMPT_CHARS = 20000
+        MAX_CONTENT_PROMPT_CHARS = 100000
         if len(content) > MAX_CONTENT_PROMPT_CHARS:
             self._log(f"Content for '{file_path}' is very long ({len(content)} chars), truncating for LLM prompt.")
             content = content[:MAX_CONTENT_PROMPT_CHARS] + "\n... (content truncated for brevity) ..."
