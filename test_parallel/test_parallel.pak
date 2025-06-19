@@ -1,0 +1,60 @@
+{
+  "metadata": {
+    "pak_format_version": "4.2.0-refactored",
+    "archive_uuid": "iZfF",
+    "creation_timestamp_utc": "2025-06-19T08:39:43.412347Z",
+    "source_tool_version": "pak_core_refactored_v_unknown",
+    "compression_level_setting": "aggressive",
+    "max_tokens_setting": 0,
+    "total_files": 4,
+    "total_original_size_bytes": 76,
+    "total_compressed_size_bytes": 333,
+    "total_estimated_tokens": 65
+  },
+  "files": [
+    {
+      "path": "test1.py",
+      "content": "def hello():\n    ...\n\n# ... (Structure extracted via AST - pak_analyzer.py)",
+      "original_size_bytes": 18,
+      "compressed_size_bytes": 75,
+      "estimated_tokens": 6,
+      "compression_method": "aggressive (python-ast)",
+      "compression_ratio": 0.24,
+      "importance_score": 0,
+      "last_modified_utc": "2025-06-19T08:39:43.066379Z"
+    },
+    {
+      "path": "test2.py",
+      "content": "def world():\n    ...\n\n# ... (Structure extracted via AST - pak_analyzer.py)",
+      "original_size_bytes": 18,
+      "compressed_size_bytes": 75,
+      "estimated_tokens": 6,
+      "compression_method": "aggressive (python-ast)",
+      "compression_ratio": 0.24,
+      "importance_score": 0,
+      "last_modified_utc": "2025-06-19T08:39:43.066379Z"
+    },
+    {
+      "path": "test3.py",
+      "content": "def foo():\n    ...\n\n# ... (Structure extracted via AST - pak_analyzer.py)",
+      "original_size_bytes": 16,
+      "compressed_size_bytes": 73,
+      "estimated_tokens": 6,
+      "compression_method": "aggressive (python-ast)",
+      "compression_ratio": 0.2191780821917808,
+      "importance_score": 0,
+      "last_modified_utc": "2025-06-19T08:39:43.066379Z"
+    },
+    {
+      "path": "test4.txt",
+      "content": "Plain text content here\n# ... (Light compression via regex - text)\n# ... (Medium compression via regex - text)",
+      "original_size_bytes": 24,
+      "compressed_size_bytes": 110,
+      "estimated_tokens": 47,
+      "compression_method": "aggressive (text-ast)",
+      "compression_ratio": 0.21818181818181817,
+      "importance_score": 0,
+      "last_modified_utc": "2025-06-19T08:39:43.066379Z"
+    }
+  ]
+}

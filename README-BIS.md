@@ -1,63 +1,63 @@
-# pak4.py: il tool che ti salva dall'inferno del copia-incolla con gli LLM
+# pak.py: The tool that saves you from LLM copy-paste hell
 
-## Il problema che tutti abbiamo (ma nessuno ammette)
+## The problem every developer has (but nobody admits)
 
-Sei un programmatore nel 2025. Usi Claude, ChatGPT, o qualsiasi altro LLM **ogni 20 secondi**. E ogni volta è la stessa storia:
+It's 2025. You're a programmer using Claude, ChatGPT, or any LLM **every 20 seconds**. Every time, it's the same pain:
 
-- Devi mandare 5-10 file all'LLM per context
-- Apri il primo file → Ctrl+A → Ctrl+C → vai nel chat → Ctrl+V
-- "Ah no, devo dire qual è il nome del file"
-- Torni indietro → copi il path → incolli prima del codice
-- Ripeti per tutti i file
-- Dopo 10 minuti hai un prompt che sembra vomito di gatto
-- L'LLM ti risponde con codice modificato
-- Ora devi **rifare tutto al contrario**: copiare ogni pezzo di codice dall'LLM e salvarlo nel file giusto
-- Ti sbagli, sovrascrivi la versione sbagliata, bestemmie
+- You need to send 5-10 files to the LLM for context
+- Open the first file → Ctrl+A → Ctrl+C → go to chat → Ctrl+V
+- "Wait, I need to say which file this is"
+- Go back → copy the path → paste before the code
+- Repeat for every file
+- After 10 minutes, your prompt looks like cat vomit
+- The LLM replies with modified code
+- Now you have to **do it all in reverse**: copy each code block from the LLM and save it in the right file
+- You make mistakes, overwrite the wrong version, curse
 
-**Questo 20 volte al giorno.**
+**This happens 20 times a day.**
 
-Se ti riconosci in questa descrizione, pak4.py è nato per te.
+If this sounds familiar, pak.py was made for you.
 
-## Pak3: la soluzione che avresti dovuto inventare tu
+## pak: The solution you wish you invented
 
-Pak3 è un tool da riga di comando che risolve **esattamente** questo problema. In modo elegante, veloce, e senza rompere le scatole.
+pak is a command-line tool that solves **exactly** this problem. Elegantly, quickly, and without hassle.
 
-### Il workflow prima di pak4.py
+### The workflow before pak.py
 ```
-1. Apri file1.py → copia → incolla nel chat con "File: file1.py"
-2. Apri file2.js → copia → incolla nel chat con "File: file2.js"  
-3. Apri file3.css → copia → incolla nel chat con "File: file3.css"
-4. Scrivi la tua domanda
-5. LLM risponde con codice modificato
-6. Copi manualmente ogni pezzo e lo salvi nel file giusto
-7. Speri di non aver fatto casino
+1. Open file1.py → copy → paste in chat with "File: file1.py"
+2. Open file2.js → copy → paste in chat with "File: file2.js"  
+3. Open file3.css → copy → paste in chat with "File: file3.css"
+4. Write your question
+5. LLM replies with modified code
+6. Manually copy each piece and save it in the right file
+7. Hope you didn't mess up
 ```
 
-**Tempo**: ~15 minuti di lavoro noioso  
-**Errori**: Garantiti  
-**Frustrazione**: Massima
+**Time**: ~15 minutes of boring work  
+**Errors**: Guaranteed  
+**Frustration**: Maximum
 
-### Il workflow con pak4.py
+### The workflow with pak.py
 ```bash
-# Impacchetta tutto
-pak4.py --compress-level smart src/ > progetto.pak
+# Package everything
+pak.py --compress-level smart src/ > project.pak
 
-# Incolli il contenuto di progetto.pak nel chat + la tua domanda
-# LLM risponde con un nuovo file .pak
+# Paste the content of project.pak in chat + your question
+# LLM replies with a new .pak file
 
-# Scompatti la risposta
-pak4.py --unpack risposta.pak --outdir ./updated
+# Unpack the response
+pak.py --unpack response.pak --outdir ./updated
 ```
 
-**Tempo**: 30 secondi  
-**Errori**: Zero  
-**Frustrazione**: Zero
+**Time**: 30 seconds  
+**Errors**: Zero  
+**Frustration**: Zero
 
-## Come funziona pak4.py nella pratica
+## How pak.py works in practice
 
-### Esempio reale: Refactoring di un componente React
+### Real example: Refactoring a React component
 
-Hai una directory con questi file:
+You have a directory with these files:
 ```
 src/
 ├── components/
@@ -70,40 +70,40 @@ src/
     └── formatters.js
 ```
 
-**Senza pak4.py:**
-1. Apri 5 file
-2. Copia-incolla ognuno nel chat
-3. Scrivi: "Converti questo componente per usare TypeScript"
-4. LLM risponde con 5 blocchi di codice
-5. Copi manualmente ogni blocco nel file giusto
-6. Rinomini i file da .js a .ts/.tsx
-7. Controlli che non hai fatto errori
+**Without pak.py:**
+1. Open 5 files
+2. Copy-paste each into chat
+3. Write: "Convert this component to use TypeScript"
+4. LLM replies with 5 code blocks
+5. Manually copy each block into the right file
+6. Rename files from .js to .ts/.tsx
+7. Check for mistakes
 
-**Con pak4.py:**
+**With pak.py:**
 ```bash
-# Impacchetta
-pak4.py --compress-level medium src/ --ext .jsx .js .css > componente.pak
+# Package
+pak.py --compress-level medium src/ --ext .jsx .js .css > component.pak
 
-# Nel chat:
-# [incolli contenuto di componente.pak]
-# "Converti tutto a TypeScript e ottimizza le performance"
+# In chat:
+# [paste content of component.pak]
+# "Convert everything to TypeScript and optimize performance"
 
-# LLM risponde con nuovo file .pak
-# Lo salvi come typescript.pak
+# LLM replies with a new .pak file
+# Save it as typescript.pak
 
-# Scompatti
-pak4.py --unpack typescript.pak --outdir ./src-updated
+# Unpack
+pak.py --unpack typescript.pak --outdir ./src-updated
 ```
 
-Risultato: hai una directory `src-updated/` con tutti i file convertiti, ottimizzati, e già rinominati correttamente.
+Result: you get a `src-updated/` directory with all files converted, optimized, and correctly renamed.
 
-### Esempio 2: Debug di un bug complesso
+### Example 2: Debugging a complex bug
 
-Il tuo backend Node.js ha un bug che coinvolge più file. Invece di copiare manualmente:
+Your Node.js backend has a bug involving multiple files. Instead of copying manually:
 
 ```bash
-# Impacchetta solo i file rilevanti
-pak4.py --compress-level aggressive \
+# Package only the relevant files
+pak.py --compress-level aggressive \
      server.js \
      routes/auth.js \
      middleware/validation.js \
@@ -111,29 +111,29 @@ pak4.py --compress-level aggressive \
      > bug-context.pak
 ```
 
-Nel chat incolli il contenuto + "C'è un bug nell'autenticazione, l'utente viene loggato anche se il token è scaduto".
+Paste the content in chat + "There's a bug in authentication, users get logged in even if the token is expired."
 
-L'LLM vede **tutto il context** necessario in un colpo solo e può dare una risposta precisa.
+The LLM sees **all the necessary context** at once and can give a precise answer.
 
-### Esempio 3: Code review collaborativo
+### Example 3: Collaborative code review
 
-Il tuo collega ti chiede di revieware una feature. Invece di mandare link GitHub:
+Your colleague asks you to review a feature. Instead of sending GitHub links:
 
 ```bash
-# Impacchetta la feature
-pak4.py --compress-level light feature-branch/ --ext .py .sql > feature-review.pak
+# Package the feature
+pak.py --compress-level light feature-branch/ --ext .py .sql > feature-review.pak
 ```
 
-Mandi il file `.pak` al collega, che può:
-1. Leggerlo direttamente (è testo semplice)
-2. Scompattarlo per testare localmente
-3. Mandarlo all'LLM per analysis automatica
+Send the `.pak` file to your colleague, who can:
+1. Read it directly (it's plain text)
+2. Unpack it to test locally
+3. Send it to the LLM for automatic analysis
 
-## Perché pak4.py è geniale per il workflow LLM
+## Why pak.py is brilliant for LLM workflows
 
-### 1. **Formato LLM-native**
+### 1. **LLM-native format**
 
-Il formato `.pak` è **progettato** per essere capito dagli LLM:
+The `.pak` format is **designed** to be understood by LLMs:
 
 ```
 __PAK_FILE_abc123_START__
@@ -158,202 +158,202 @@ export const Button = ({ children, variant = 'primary', ...props }) => {
 __PAK_DATA_abc123_END__
 ```
 
-L'LLM sa **esattamente**:
-- Che file è
-- Che linguaggio è
-- Quanto è grande  
-- Come è stato compresso
+The LLM knows **exactly**:
+- What file it is
+- What language it is
+- How big it is  
+- How it was compressed
 
-E può **riprodurre lo stesso formato** quando ti risponde.
+And can **reproduce the same format** when replying.
 
-### 2. **Compressione intelligente**
+### 2. **Smart compression**
 
-Pak3 non è stupido. Con `--compress-level smart`:
-- **README.md** → mantiene tutto (importante per context)
-- **main.py** → mantiene tutto (file principale)
-- **utils.py** → comprime i commenti ma mantiene la logica
-- **test_*.py** → comprime aggressivamente (spesso non serve tutto)
+pak isn't dumb. With `--compress-level smart`:
+- **README.md** → keeps everything (important for context)
+- **main.py** → keeps everything (main file)
+- **utils.py** → compresses comments but keeps logic
+- **test_*.py** → compresses aggressively (often you don't need all tests)
 
-### 3. **Gestione automatica dei token**
+### 3. **Automatic token management**
 
 ```bash
-pak4.py --compress-level smart --max-tokens 8000 huge-project/
+pak.py --compress-level smart --max-tokens 8000 huge-project/
 ```
 
-Pak3 **prioritizza automaticamente** i file più importanti e si ferma quando raggiunge il limite di token. Non devi più contare caratteri o preoccuparti di sforare il context window.
+pak **automatically prioritizes** the most important files and stops when the token limit is reached. No more counting characters or worrying about context window overflow.
 
-### 4. **Fallback robusto**
+### 4. **Robust fallback**
 
-Se pak4.py non riesce a fare parsing AST di un file (per qualsiasi motivo), **non crasha**. Passa automaticamente alla compressione testuale. Il workflow non si interrompe mai.
+If pak.py can't parse a file's AST (for any reason), it **doesn't crash**. It automatically falls back to text compression. Your workflow never breaks.
 
-## Setup: 5 minuti per sempre
+## Setup: 5 minutes forever
 
-### Installazione
+### Installation
 ```bash
-# Scarica pak4.py
-curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak4.py
-chmod +x pak4.py
-sudo mv pak4.py /usr/local/bin/
+# Download pak.py
+curl -O https://raw.githubusercontent.com/pakkio/pak/main/pak.py
+chmod +x pak.py
+sudo mv pak.py /usr/local/bin/
 
-# Verifica che funzioni
-pak4.py --version
+# Check it works
+pak.py --version
 ```
 
-### Dipendenze (opzionali ma raccomandate)
+### Dependencies (optional but recommended)
 ```bash
-# Per la compressione AST avanzata
+# For advanced AST compression
 pip3 install --user tree-sitter tree-sitter-languages tree-sitter-python
 
-# Verifica supporto AST
-pak4.py --ast-info
+# Check AST support
+pak.py --ast-info
 ```
 
-Se non installi le dipendenze Python, pak4.py **funziona comunque** con compressione testuale. L'AST è un bonus, non un requisito.
+If you don't install the Python dependencies, pak.py **still works** with text compression. AST is a bonus, not a requirement.
 
-## I comandi che usi davvero
+## Commands you'll actually use
 
-### Impacchettamento base
+### Basic packaging
 ```bash
-# Tutto il progetto
-pak4.py src/ > progetto.pak
+# Whole project
+pak.py src/ > project.pak
 
-# Solo file specifici
-pak4.py main.py utils.py config.yaml > core.pak
+# Only specific files
+pak.py main.py utils.py config.yaml > core.pak
 
-# Solo certi tipi di file
-pak4.py --ext .py .md ./mio-progetto > python-docs.pak
+# Only certain file types
+pak.py --ext .py .md ./my-project > python-docs.pak
 ```
 
-### Compressione intelligente
+### Smart compression
 ```bash
-# Leggera: rimuove spazi vuoti e commenti banali
-pak4.py --compress-level light src/ > light.pak
+# Light: removes whitespace and trivial comments
+pak.py --compress-level light src/ > light.pak
 
-# Media: mantiene struttura ma comprime implementazioni
-pak4.py --compress-level medium src/ > medium.pak
+# Medium: keeps structure but compresses implementations
+pak.py --compress-level medium src/ > medium.pak
 
-# Aggressiva: solo signature e API pubbliche
-pak4.py --compress-level aggressive src/ > minimal.pak
+# Aggressive: only signatures and public API
+pak.py --compress-level aggressive src/ > minimal.pak
 
-# Smart: sceglie automaticamente in base all'importanza del file
-pak4.py --compress-level smart --max-tokens 12000 src/ > smart.pak
+# Smart: auto-selects based on file importance
+pak.py --compress-level smart --max-tokens 12000 src/ > smart.pak
 ```
 
-### Scompattamento
+### Unpacking
 ```bash
-# Nella directory corrente
-pak4.py --unpack risposta.pak
+# In current directory
+pak.py --unpack response.pak
 
-# In una directory specifica
-pak4.py --unpack risposta.pak --outdir ./nuova-versione
+# In a specific directory
+pak.py --unpack response.pak --outdir ./new-version
 
-# Verifica cosa c'è dentro prima di scompattare
-pak4.py --ls risposta.pak
+# See what's inside before unpacking
+pak.py --ls response.pak
 ```
 
-## Casi d'uso quotidiani
+## Everyday use cases
 
-### 1. **Refactoring guidato**
-"Prendi questi 10 file e convertili da Class Components a Function Components con hooks"
+### 1. **Guided refactoring**
+"Take these 10 files and convert them from Class Components to Function Components with hooks"
 
 ### 2. **Bug hunting**
-"C'è un memory leak da qualche parte in questi moduli, aiutami a trovarlo"
+"There's a memory leak somewhere in these modules, help me find it"
 
-### 3. **Code review automatico**
-"Analizza questa pull request e dimmi se ci sono problemi di security o performance"
+### 3. **Automatic code review**
+"Analyze this pull request and tell me if there are security or performance issues"
 
-### 4. **Documentazione automatica**
-"Genera documentazione API per questi endpoint"
+### 4. **Automatic documentation**
+"Generate API docs for these endpoints"
 
-### 5. **Migration assistita**
-"Migra questo progetto da Python 3.8 a 3.12, aggiorna le dependency deprecate"
+### 5. **Assisted migration**
+"Migrate this project from Python 3.8 to 3.12, update deprecated dependencies"
 
-### 6. **Ottimizzazione performance**
-"Questi componenti React renderizzano troppo spesso, ottimizzali"
+### 6. **Performance optimization**
+"These React components re-render too often, optimize them"
 
 ### 7. **Test generation**
-"Genera unit test per tutte queste funzioni"
+"Generate unit tests for all these functions"
 
-### 8. **Architettura review**
-"Questo codice è ben strutturato? Suggerisci miglioramenti architetturali"
+### 8. **Architecture review**
+"Is this code well structured? Suggest architectural improvements"
 
-## Confronti onesti
+## Honest comparisons
 
-### vs. Copia-incolla manuale
-**Pak3 vince sempre.** Non c'è gara.
+### vs. Manual copy-paste
+**pak always wins.** No contest.
 
-### vs. Script personalizzato
-Se hai già uno script che fa la stessa cosa e sei soddisfatto, continua a usarlo. Ma pak4.py probabilmente gestisce più edge cases e linguaggi del tuo script.
+### vs. Custom script
+If you already have a script that does the same and you're happy, keep using it. But pak.py probably handles more edge cases and languages than your script.
 
-### vs. GitHub + link agli LLM
-- **Pro GitHub**: Nessun setup locale
-- **Pro pak4.py**: Funziona offline, più veloce, controllo totale sul context
+### vs. GitHub + LLM links
+- **Pro GitHub**: No local setup
+- **Pro pak.py**: Works offline, faster, total control over context
 
-### vs. Tool enterprise (LLMLingua, ecc.)
-- **Pro enterprise**: Compressione più sofisticata matematicamente
-- **Pro pak4.py**: Gratis, offline, zero setup, zero dipendenze da API
+### vs. Enterprise tools (LLMLingua, etc.)
+- **Pro enterprise**: More mathematically sophisticated compression
+- **Pro pak.py**: Free, offline, zero setup, no API dependencies
 
-Per l'uso quotidiano personale, pak4.py **vince per praticità**.
+For daily personal use, pak.py **wins for convenience**.
 
-## Limiti onesti
+## Honest limitations
 
-### 1. **Non è magia**
-Se il tuo progetto ha 100k linee di codice, pak4.py non può comprimerlo in 1000 token mantenendo tutto il context. Devi essere selettivo.
+### 1. **Not magic**
+If your project has 100k lines of code, pak.py can't compress it into 1000 tokens and keep all context. You need to be selective.
 
-### 2. **Dipendenze Python per AST**
-Per la compressione avanzata serve Python + tree-sitter. Su ambienti molto ristretti potresti dover usare solo compressione testuale.
+### 2. **Python dependencies for AST**
+For advanced compression you need Python + tree-sitter. On very restricted environments you may have to use only text compression.
 
-### 3. **Non sostituisce la comprensione**
-Pak3 ti aiuta a **preparare** il context per l'LLM, ma devi comunque sapere **cosa chiedere** e **come interpretare** le risposte.
+### 3. **Doesn't replace understanding**
+pak helps you **prepare** context for the LLM, but you still need to know **what to ask** and **how to interpret** the answers.
 
-### 4. **Funziona meglio su progetti strutturati**
-Se il tuo codice è un casino totale senza structure, pak4.py non può fare miracoli nella prioritizzazione.
+### 4. **Works best on structured projects**
+If your code is a total mess with no structure, pak.py can't work miracles in prioritization.
 
-## Trucchi e tips
+## Tips and tricks
 
-### 1. **Usa alias per workflow comuni**
+### 1. **Use aliases for common workflows**
 ```bash
-# Nel tuo .bashrc/.zshrc
-alias pak-quick='pak4.py --compress-level smart --max-tokens 8000'
-alias pak-review='pak4.py --compress-level medium --ext .py .js .ts'
-alias pak-minimal='pak4.py --compress-level aggressive'
+# In your .bashrc/.zshrc
+alias pak-quick='pak.py --compress-level smart --max-tokens 8000'
+alias pak-review='pak.py --compress-level medium --ext .py .js .ts'
+alias pak-minimal='pak.py --compress-level aggressive'
 ```
 
-### 2. **Combina con altri tool**
+### 2. **Combine with other tools**
 ```bash
-# Solo file modificati di recente
-git diff --name-only HEAD~5 | xargs pak4.py > recent-changes.pak
+# Only recently modified files
+git diff --name-only HEAD~5 | xargs pak.py > recent-changes.pak
 
-# Solo file che contengono una certa funzione  
-grep -r "getUserData" src/ | cut -d: -f1 | sort -u | xargs pak4.py > user-data-logic.pak
+# Only files containing a certain function  
+grep -r "getUserData" src/ | cut -d: -f1 | sort -u | xargs pak.py > user-data-logic.pak
 ```
 
-### 3. **Template per richieste comuni**
-Crea file template che includi nelle richieste:
+### 3. **Templates for common requests**
+Create template files to include in your requests:
 ```bash
-pak4.py src/ > codebase.pak
+pak.py src/ > codebase.pak
 cat codebase.pak refactoring-prompt-template.txt > full-request.txt
 ```
 
-### 4. **Backup before unpack**
+### 4. **Backup before unpacking**
 ```bash
-# Sempre backup prima di scompattare su codice esistente
+# Always backup before unpacking over existing code
 cp -r src/ src-backup/
-pak4.py --unpack new-version.pak --outdir src/
+pak.py --unpack new-version.pak --outdir src/
 ```
 
-## Conclusione: il tool che non sapevi di volere
+## Conclusion: The tool you didn't know you needed
 
-Pak3 è uno di quei tool che sembra **ovvio dopo** che lo usi. Ti chiedi come hai fatto senza per tutto questo tempo.
+pak is one of those tools that seems **obvious after** you use it. You wonder how you lived without it.
 
-Non rivoluziona il mondo. Non usa AI. Non ha una startup da miliardi dietro.
+It doesn't revolutionize the world. It doesn't use AI. There's no billion-dollar startup behind it.
 
-**Semplicemente funziona.** Risolve un problema quotidiano fastidioso in modo elegante e affidabile.
+**It just works.** It solves a daily annoying problem elegantly and reliably.
 
-Se lavori con LLM quotidianamente, scaricalo. Provalo per una settimana. Se non ti semplifica la vita, hai perso 5 minuti. Se ti semplifica la vita, hai guadagnato ore ogni settimana per sempre.
+If you work with LLMs daily, download it. Try it for a week. If it doesn't make your life easier, you've lost 5 minutes. If it does, you've gained hours every week forever.
 
-È gratis, è open source, e il tuo workflow con gli LLM non sarà più lo stesso.
+It's free, it's open source, and your LLM workflow will never be the same.
 
 **Download**: https://github.com/pakkio/pak  
-**Tempo di setup**: 5 minuti  
-**ROI**: Infinito
+**Setup time**: 5 minutes  
+**ROI**: Infinite

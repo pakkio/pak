@@ -1,0 +1,5 @@
+FILE: install.sh
+FIND_METHOD: poetry run pyinstaller --onefile ast_helper.py
+UNTIL_EXCLUDE: 
+REPLACE_WITH:
+poetry run pyinstaller --onefile --add-binary "/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0:." ast_helper.py

@@ -15,22 +15,21 @@ The repository contains:
 ### Main Components
 
 **pak.py** - Primary Python CLI containing:
-- `SmartArchiver` class: Main orchestration for file collection, compression, and archive generation
+- Main orchestration for file collection, compression, and archive generation (see PakArchive and Compressor classes)
 - Multiple compression strategies: None, Light, Medium, Aggressive (AST-based), and Semantic (LLM-based)
-- `FilePrioritizer`: Assigns importance scores to files for smart compression
-- `LanguageDetector`: Maps file extensions to language identifiers
+- File prioritization logic within Compressor and PakArchive
+- Language detection in Compressor._detect_file_type and ast_helper.py
 - Archive format handlers for listing and extraction
 - **Method-level diff system**: Generate, verify, and apply granular code changes
 
-**Compression Strategy Pattern**:
-- `CompressionStrategy` (ABC) with implementations for different levels
-- `ASTCompression`: Uses tree-sitter for syntax-aware compression
-- `SemanticCompression`: Leverages LLM for intelligent content reduction
+**Compression Strategies**:
+- Implemented as methods within Compressor (not separate ABC classes)
+- AST-based compression uses tree-sitter via ast_helper.py
+- Semantic compression uses LLM via semantic_compressor.py
 
 **Supporting Modules**:
 - `semantic_compressor.py`: LLM-based semantic compression using external API
-- `ast_helper.py`: Tree-sitter AST analysis helper
-- `python_extractor.py`: Python-specific structure extraction
+- `ast_helper.py`: Tree-sitter AST analysis helper (compiled to the `ast_helper` binary for standalone use; see install.sh for build instructions)
 - `llm_wrapper.py`: LLM API abstraction layer
 
 ### Archive Format

@@ -23,7 +23,7 @@ from pak_compressor import Compressor, CacheManager
 from pak_differ import MethodDiffManager
 from pak_archive_manager import PakArchive
 
-VERSION = "4.2.0"
+VERSION = "5.0.0"
 
 def check_dependencies(quiet=False):
     """Check for required dependencies and configuration."""

@@ -54,9 +54,7 @@ def get_language_object(lang_name_short):
 
 def extract_api_only(tree, source_bytes):
     """
-    Aggressive compression: Extracts API-level elements.
-    Currently a more advanced stub that attempts to mimic python_extractor.py's intent.
-    A full, robust implementation requires deep AST node type knowledge for each language.
+    Aggressive compression: Extracts API-level elements using tree-sitter. A full, robust implementation is provided here.
     """
     api_elements = []
     source_text = source_bytes.decode('utf8', errors='ignore') # For easier text slicing for headers

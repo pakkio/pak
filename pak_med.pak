@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "pak_format_version": "4.2.0-refactored",
+    "archive_uuid": "XoU2",
+    "creation_timestamp_utc": "2025-06-18T18:25:41.219568Z",
+    "source_tool_version": "pak_core_refactored_v_unknown",
+    "compression_level_setting": "medium",
+    "max_tokens_setting": 0,
+    "total_files": 1,
+    "total_original_size_bytes": 0,
+    "total_compressed_size_bytes": 0,
+    "total_estimated_tokens": 0
+  },
+  "files": [
+    {
+      "path": "tests/__init__.py",
+      "content": "",
+      "original_size_bytes": 0,
+      "compressed_size_bytes": 0,
+      "estimated_tokens": 0,
+      "compression_method": "skip (empty/whitespace)",
+      "compression_ratio": 1.0,
+      "importance_score": 0,
+      "last_modified_utc": "2025-06-18T17:56:15.087198Z"
+    }
+  ]
+}

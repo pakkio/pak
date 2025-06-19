@@ -161,7 +161,6 @@ Preparing context for documentation generation:
 ### Core Components
 
 - **pak.py**: Main Python CLI with full feature set
-- **pak**: Simple bash script for basic operations (legacy)
 - **Compression Strategies**: Modular compression system with multiple algorithms
 - **Method Diff System**: Granular change extraction and application
 - **Archive Format**: Custom JSON-based format optimized for LLM consumption
