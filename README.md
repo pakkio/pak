@@ -208,17 +208,32 @@ PAK_DEBUG=true ./pak.py test_files/ -c smart -m 5000
 Build standalone executables that work without Python:
 
 ```bash
-# Build executables
+# Simple build (recommended - uses install.sh)
+./install.sh
+
+# Manual build
 poetry run pyinstaller --onefile pak.py
 poetry run pyinstaller --onefile ast_helper.py
-
-# Install to ~/bin
-./install.sh
 
 # Use anywhere
 pak src/ -c smart -m 8000 -o project.pak
 ast_helper analyze_file.py
 ```
+
+### PyInstaller Notes
+
+**WSL/Virtual Environment Fix**: If you encounter shared library errors like `Failed to load Python shared library`, the build process automatically includes the required `libpython3.12.so` using:
+
+```bash
+poetry run pyinstaller --onefile --add-binary "/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0:." pak.py
+```
+
+This fix is already integrated into `pak.spec` and `install.sh`. The issue occurs when:
+- Using Poetry virtual environments (which lack the shared Python library)
+- Building on WSL or similar environments  
+- PyInstaller can't find the Python shared library at runtime
+
+**Build artifacts**: The `build/` and `dist/` directories are created during compilation and can be ignored (add to `.gitignore`).
 
 ## Migration from Legacy
 

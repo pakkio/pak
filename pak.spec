@@ -4,7 +4,7 @@
 a = Analysis(
     ['pak.py'],
     pathex=[],
-    binaries=[],
+    binaries=[('/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0', '.')],
     datas=[],
     hiddenimports=[],
     hookspath=[],

@@ -234,10 +234,10 @@ The codebase follows a modular pattern where `pak.py` orchestrates specialized m
 - **pak_analyzer.py** - Language-specific analysis
 
 ### Architecture Simplification (v5.0.0)
-**IMPORTANT**: The pak tool family has been consolidated to two main variants:
+**IMPORTANT**: The pak tool family has been consolidated to a single variant:
 
-- **pak** (Bash script) - Simple, zero-dependency solution for basic tasks
 - **pak.py** (Python CLI) - Full-featured with semantic compression and method diff support
+- **pak** (compiled executable) - Standalone binary created from pak.py using PyInstaller
 
 **Benefits of the simplification:**
 - Eliminates confusing multiple variants (pak3, pak4 bash wrapper)
@@ -247,10 +247,10 @@ The codebase follows a modular pattern where `pak.py` orchestrates specialized m
 - Better error messages and help system
 
 ### Version Management
-- `pak` (bash) and `pak.py` (Python) are the two supported variants
+- `pak.py` (Python source) and `pak` (compiled executable) are the supported variants
 - pak.py is version 5.0.0+ with full feature set and backward compatibility
-- Legacy pak3/pak4 bash scripts are deprecated
-- Backward compatibility maintained across versions
+- Legacy pak bash script has been eliminated
+- Backward compatibility maintained for legacy argument syntax
 
 ## Standalone Executables
 
@@ -276,7 +276,11 @@ These executables bundle all dependencies (including tree-sitter for AST analysi
 To build the standalone executables, use Poetry and PyInstaller:
 
 ```bash
-poetry run pyinstaller --onefile pak.py
+# Recommended: use install.sh (handles all dependencies automatically)
+./install.sh
+
+# Manual build (with WSL/virtual environment fix)
+poetry run pyinstaller --onefile --add-binary "/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0:." pak.py
 poetry run pyinstaller --onefile ast_helper.py
 ```
 The executables will be created in the `dist/` directory. Copy them to `~/bin` as shown above.
@@ -284,4 +288,5 @@ The executables will be created in the `dist/` directory. Copy them to `~/bin` a
 ### Troubleshooting
 - Make sure the files are executable: `chmod +x ~/bin/pak ~/bin/ast_helper`
 - Check that `~/bin` is in your `$PATH`
-- If you encounter issues with PyInstaller, rebuild as above
+- **WSL/Virtual Environment Issue**: If you see `Failed to load Python shared library`, use the `--add-binary` flag as shown above (already integrated in pak.spec)
+- The issue occurs when Poetry virtual environments lack the shared Python library
