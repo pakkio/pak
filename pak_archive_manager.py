@@ -7,11 +7,11 @@ import string
 import random
 import re # For pattern matching in list/extract
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 # Import Compressor from the sibling module
 try:
-    from pak_compressor import Compressor, CacheManager # CacheManager might be needed if PakArchive sets it up
+    from pak_compressor import Compressor, CacheManager, ParallelCompressor # CacheManager might be needed if PakArchive sets it up
 except ImportError:
     # Fallback for direct execution
     if __name__ == '__main__':
@@ -93,6 +93,71 @@ class PakArchive:
         self.total_original_size_bytes += comp_result["original_size"]
         self.total_compressed_size_bytes += comp_result["compressed_size"]
         self.total_estimated_tokens += comp_result["estimated_tokens"]
+    
+    def add_files_parallel(self, file_data_list: List[Tuple[str, str, int]], max_workers: int = 3):
+        """
+        Add multiple files to the archive using parallel processing.
+        
+        Args:
+            file_data_list: List of (file_path, content, importance) tuples
+            max_workers: Maximum number of parallel workers (default 3 for conservative approach)
+        """
+        if not file_data_list:
+            return
+            
+        self._log(f"Adding {len(file_data_list)} files with parallel processing (max_workers={max_workers})")
+        
+        # Initialize compressor and parallel processor
+        base_compressor = Compressor(cache_manager=self.cache_manager, quiet=self.quiet)
+        parallel_compressor = ParallelCompressor(base_compressor, max_workers=max_workers, quiet=self.quiet)
+        
+        # Prepare compression tasks: (content, normalized_file_path, compression_level)
+        compression_tasks = []
+        file_info_list = []
+        
+        for file_path, content, importance in file_data_list:
+            normalized_file_path = str(Path(file_path)).replace(os.sep, '/') # Ensure POSIX-style paths in archive
+            compression_tasks.append((content, normalized_file_path, self.compression_level))
+            file_info_list.append((normalized_file_path, importance, file_path))  # Store for later processing
+        
+        # Execute parallel compression
+        compression_results = parallel_compressor.compress_files_parallel(compression_tasks)
+        
+        # Process results and add to archive
+        for (normalized_file_path, importance, original_file_path), comp_result in zip(file_info_list, compression_results):
+            if comp_result is None:
+                self._log(f"Warning: No result for file {normalized_file_path}", is_error=True)
+                continue
+                
+            self._log(f"Adding '{normalized_file_path}': "
+                      f"{comp_result['original_size']}B -> {comp_result['compressed_size']}B "
+                      f"({comp_result['compression_ratio']:.1f}x), "
+                      f"{comp_result['estimated_tokens']} tokens, "
+                      f"Method: {comp_result['method']}")
+
+            file_entry: Dict[str, Any] = {
+                "path": normalized_file_path,
+                "content": comp_result["compressed_content"],
+                "original_size_bytes": comp_result["original_size"],
+                "compressed_size_bytes": comp_result["compressed_size"],
+                "estimated_tokens": comp_result["estimated_tokens"],
+                "compression_method": comp_result["method"],
+                "compression_ratio": comp_result["compression_ratio"],
+                "importance_score": importance,
+                "last_modified_utc": datetime.datetime.utcfromtimestamp(os.path.getmtime(original_file_path)).isoformat() + "Z" if os.path.exists(original_file_path) else None
+            }
+            self.files_data.append(file_entry)
+
+            # Update totals
+            self.total_original_size_bytes += comp_result["original_size"]
+            self.total_compressed_size_bytes += comp_result["compressed_size"]
+            self.total_estimated_tokens += comp_result["estimated_tokens"]
+        
+        # Log parallel processing statistics
+        parallel_stats = parallel_compressor.get_parallel_stats()
+        self._log(f"Parallel processing completed. Stats: {parallel_stats['files_processed_in_parallel']} parallel, "
+                  f"{parallel_stats['files_processed_sequentially']} sequential, "
+                  f"avg wait: {parallel_stats['average_wait_per_file']:.1f}s")
 
     def create_archive(self, output_file_path: Optional[str] = None) -> Optional[str]:
         """

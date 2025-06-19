@@ -1,7 +1,10 @@
 import pytest
 import json
 from unittest.mock import patch, MagicMock
-from pak_compressor import Compressor, TokenCounter, CacheManager, SemanticCompressor as InternalSemanticCompressor
+from pak_compressor import Compressor, LanguageAwareTokenizer, CacheManager, SemanticCompressor as InternalSemanticCompressor
+
+# Backward compatibility alias for tests
+TokenCounter = LanguageAwareTokenizer
 
 # Fixtures for sample content are in conftest.py
 
@@ -14,8 +17,11 @@ def test_token_counter_empty():
     assert TokenCounter.count_tokens("") == 0
 
 def test_token_counter_code(sample_python_code_str):
-    # This is a heuristic, exact value depends on implementation
-    assert TokenCounter.count_tokens(sample_python_code_str, "python") > 10
+    # Language-aware tokenizer should be more accurate than simple 3:1 heuristic
+    tokens = TokenCounter.count_tokens(sample_python_code_str, "python")
+    old_method_tokens = len(sample_python_code_str) // 3
+    assert tokens > 5  # Should produce reasonable token count
+    assert tokens < old_method_tokens  # Should be more efficient than old method
 
 def test_token_counter_text(sample_text_content_str):
     assert TokenCounter.count_tokens(sample_text_content_str, "text") > 5
@@ -46,7 +52,8 @@ def test_compress_none(compressor_instance, sample_text_content_str):
 
 def test_compress_light(compressor_instance, sample_text_content_str):
     result = compressor_instance.compress_content(sample_text_content_str, "file.txt", "light")
-    assert "Trailing spaces here." not in result["compressed_content"] # Trailing removed
+    assert "Trailing spaces here." in result["compressed_content"] # Text content preserved
+    assert "here.   " not in result["compressed_content"]  # Trailing spaces removed  
     assert "\n\n\n" not in result["compressed_content"] # Multiple blanks collapsed
     assert result["method"] == "light (whitespace norm.)"
     assert result["original_size"] > result["compressed_size"]

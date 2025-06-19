@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# IDE / Editor specific
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Test output & temporary files
+*.pak # If .pak files are build artifacts/test outputs and not source
+*.bak # Backup files like .py.bak
+
+# Environment files
+.env
+
+# Other build artifacts if any (e.g., coverage reports)
+.coverage
+htmlcov/

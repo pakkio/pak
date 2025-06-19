@@ -3,8 +3,15 @@ import sys
 import json
 import re
 import hashlib
+import time
+import asyncio
+import threading
+import random
+from collections import deque
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import wraps
 
 # Import MultiLanguageAnalyzer from the sibling module
 try:
@@ -29,30 +36,240 @@ except ImportError:
     SEMANTIC_AVAILABLE = False
     requests = None # Define requests as None if import fails
 
-class TokenCounter:
-    """Token counter using a simple heuristic: 3 chars = 1 token (tiktoken disabled)."""
+
+def retry_with_exponential_backoff(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 60.0, 
+                                  backoff_multiplier: float = 2.0, jitter: bool = True):
+    """
+    Decorator for retry logic with exponential backoff.
+    
+    Args:
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial delay between retries (seconds)
+        max_delay: Maximum delay between retries (seconds)
+        backoff_multiplier: Multiplier for exponential backoff
+        jitter: Add random jitter to avoid thundering herd
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):  # +1 for initial attempt
+                try:
+                    return func(*args, **kwargs)
+                    
+                except Exception as e:
+                    last_exception = e
+                    
+                    # Handle requests exceptions if available
+                    if requests and hasattr(requests, 'exceptions'):
+                        # HTTPError handling
+                        if isinstance(e, requests.exceptions.HTTPError):
+                            response = getattr(e, 'response', None)
+                            status_code = response.status_code if response else 0
+                            
+                            # Don't retry on certain status codes
+                            if status_code in [400, 401, 403, 404]:  # Client errors (permanent)
+                                raise
+                            
+                            # Only retry on retriable errors
+                            if status_code not in [429, 500, 502, 503, 504]:
+                                raise
+                                
+                        # Network-related exceptions (retriable)
+                        elif isinstance(e, (requests.exceptions.Timeout, 
+                                          requests.exceptions.ConnectionError)):
+                            pass  # These are retriable
+                            
+                        # Other requests exceptions
+                        elif isinstance(e, requests.exceptions.RequestException):
+                            # Determine if retriable based on message
+                            error_msg = str(e).lower()
+                            if any(keyword in error_msg for keyword in ['timeout', 'connection', 'network']):
+                                pass  # Retriable
+                            else:
+                                raise  # Not retriable
+                        else:
+                            # Non-requests exception, don't retry
+                            raise
+                    else:
+                        # No requests module, don't retry
+                        raise
+                    
+                    # Don't retry on the last attempt
+                    if attempt == max_retries:
+                        raise
+                
+                # Calculate delay for next attempt
+                if attempt < max_retries:
+                    delay = min(max_delay, base_delay * (backoff_multiplier ** attempt))
+                    
+                    # Add jitter to prevent thundering herd
+                    if jitter:
+                        delay = delay * (0.5 + random.random() * 0.5)  # 50-100% of calculated delay
+                    
+                    # Log retry attempt
+                    if args and hasattr(args[0], '_log'):  # Check if first arg has _log method (self)
+                        try:
+                            args[0]._log(f"Retry attempt {attempt + 1}/{max_retries} in {delay:.1f}s after error: {last_exception}")
+                        except:
+                            print(f"RetryDecorator: Retry attempt {attempt + 1}/{max_retries} in {delay:.1f}s", file=sys.stderr)
+                    else:
+                        print(f"RetryDecorator: Retry attempt {attempt + 1}/{max_retries} in {delay:.1f}s", file=sys.stderr)
+                    
+                    time.sleep(delay)
+            
+            # This should never be reached due to the raise in the loop
+            raise last_exception
+            
+        return wrapper
+    return decorator
+
+
+class LanguageAwareTokenizer:
+    """Advanced token counter that considers language characteristics and patterns."""
+    
+    # Language-specific configurations for more accurate token estimation
+    LANGUAGE_CONFIGS = {
+        'python': {
+            'base_ratio': 2.8,
+            'keywords': r'\b(def|class|import|from|if|elif|else|for|while|try|except|finally|with|as|return|yield|lambda|and|or|not|in|is)\b',
+            'keyword_weight': 0.7,
+            'string_patterns': r'["\'].*?["\']',
+            'comment_patterns': r'#.*$'
+        },
+        'javascript': {
+            'base_ratio': 3.2,
+            'keywords': r'\b(function|const|let|var|if|else|for|while|try|catch|finally|return|async|await|class|extends|import|export|from)\b',
+            'keyword_weight': 0.8,
+            'string_patterns': r'["\'].*?["\']|`.*?`',
+            'comment_patterns': r'//.*$|/\*.*?\*/'
+        },
+        'java': {
+            'base_ratio': 2.5,
+            'keywords': r'\b(public|private|protected|static|final|class|interface|extends|implements|if|else|for|while|try|catch|finally|return|new|this|super)\b',
+            'keyword_weight': 0.6,
+            'string_patterns': r'".*?"',
+            'comment_patterns': r'//.*$|/\*.*?\*/'
+        },
+        'markdown': {
+            'base_ratio': 4.0,
+            'keywords': r'#{1,6}\s+|```|`|\*\*|__|\[.*?\]|\(.*?\)',
+            'keyword_weight': 1.0,
+            'string_patterns': r'`.*?`',
+            'comment_patterns': r'<!--.*?-->'
+        },
+        'c': {
+            'base_ratio': 2.6,
+            'keywords': r'\b(int|char|float|double|void|if|else|for|while|do|switch|case|break|continue|return|struct|typedef|include)\b',
+            'keyword_weight': 0.5,
+            'string_patterns': r'".*?"',
+            'comment_patterns': r'//.*$|/\*.*?\*/'
+        },
+        'cpp': {
+            'base_ratio': 2.7,
+            'keywords': r'\b(int|char|float|double|void|bool|class|namespace|template|if|else|for|while|do|switch|case|break|continue|return|include|using)\b',
+            'keyword_weight': 0.6,
+            'string_patterns': r'".*?"',
+            'comment_patterns': r'//.*$|/\*.*?\*/'
+        },
+        'go': {
+            'base_ratio': 3.0,
+            'keywords': r'\b(func|var|const|type|if|else|for|range|switch|case|break|continue|return|go|defer|chan|struct|interface|package|import)\b',
+            'keyword_weight': 0.7,
+            'string_patterns': r'".*?"|`.*?`',
+            'comment_patterns': r'//.*$|/\*.*?\*/'
+        },
+        'rust': {
+            'base_ratio': 2.9,
+            'keywords': r'\b(fn|let|mut|const|if|else|match|for|while|loop|break|continue|return|struct|enum|impl|trait|use|mod|pub)\b',
+            'keyword_weight': 0.6,
+            'string_patterns': r'".*?"|r".*?"',
+            'comment_patterns': r'//.*$|/\*.*?\*/'
+        }
+    }
+    
+    # Default configuration for unknown languages
+    DEFAULT_CONFIG = {
+        'base_ratio': 3.0,
+        'keywords': r'\w+',
+        'keyword_weight': 0.8,
+        'string_patterns': r'["\'].*?["\']',
+        'comment_patterns': r''
+    }
 
     @staticmethod
     def count_tokens(content: str, file_type: str = "text") -> int:
         if not content:
             return 0
-        # Simple heuristic: 3 characters = 1 token
-        return max(1, len(content) // 3)
+            
+        # Get language configuration
+        config = LanguageAwareTokenizer.LANGUAGE_CONFIGS.get(file_type, LanguageAwareTokenizer.DEFAULT_CONFIG)
+        
+        # Clean content by removing comments and excessive whitespace
+        cleaned_content = LanguageAwareTokenizer._clean_content(content, config)
+        
+        # Calculate base character count
+        meaningful_chars = len(cleaned_content)
+        if meaningful_chars == 0:
+            return 1
+            
+        # Apply language-specific adjustments
+        base_tokens = meaningful_chars / config['base_ratio']
+        
+        # Adjust for keyword density (keywords are typically more "token-dense")
+        keyword_matches = len(re.findall(config['keywords'], cleaned_content, re.IGNORECASE | re.MULTILINE))
+        keyword_adjustment = keyword_matches * config['keyword_weight']
+        
+        # Calculate final token count
+        estimated_tokens = base_tokens + keyword_adjustment
+        
+        return max(1, int(estimated_tokens))
+    
+    @staticmethod
+    def _clean_content(content: str, config: Dict[str, Any]) -> str:
+        """Clean content by removing comments and normalizing whitespace."""
+        # Be conservative in cleaning to avoid removing valid code
+        # Focus on whitespace normalization and simple comment removal
+        
+        # Remove single-line comments only if we can do it safely
+        cleaned = content
+        if config.get('comment_patterns') and '#' in config['comment_patterns']:
+            # Only remove lines that start with # (after whitespace)
+            lines = cleaned.split('\n')
+            cleaned_lines = []
+            
+            for line in lines:
+                stripped = line.strip()
+                # Only remove lines that are purely comments (start with #)
+                if stripped.startswith('#') and not stripped.startswith('#!'):  # Keep shebangs
+                    continue
+                # For inline comments, be very conservative - keep the line as is
+                cleaned_lines.append(line)
+            
+            cleaned = '\n'.join(cleaned_lines)
+        
+        # Normalize whitespace: collapse multiple spaces but preserve structure
+        cleaned = re.sub(r'[ \t]+', ' ', cleaned)  # Collapse spaces/tabs
+        cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)  # Collapse multiple blank lines
+        cleaned = cleaned.strip()
+        
+        return cleaned
+
+# Backward compatibility alias
+TokenCounter = LanguageAwareTokenizer
 
 class CacheManager:
     """Manages SHA-256 based caching for semantic compression results."""
     def __init__(self, archive_path_or_id: str, quiet: bool = False):
-        # Use a consistent cache directory, e.g., in user's cache or a subfolder
-        # For simplicity here, let's assume cache is next to where script is run or related to archive
-        # A more robust solution might use appdirs.user_cache_dir("pak_tool", "pak_author")
         cache_dir = Path(os.getenv("PAK_CACHE_DIR", Path.home() / ".cache" / "pak_tool_cache"))
         cache_dir.mkdir(parents=True, exist_ok=True)
-        # Using a hash of archive_path_or_id for the cache filename to keep it cleaner
-        # Or, if archive_path_or_id is simple, just use it.
-        # This example uses a generic cache file for simplicity, but could be per-archive.
         self.cache_file = cache_dir / f"compression_cache.json"
         self.quiet = quiet
         self.cache: Dict[str, Any] = self._load_cache()
+        self.hits = 0
+        self.misses = 0
+        self.total_lookups = 0
 
     def _log(self, message: str):
         if not self.quiet:
@@ -63,7 +280,15 @@ class CacheManager:
             try:
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
                     self._log(f"Loading cache from {self.cache_file}")
-                    return json.load(f)
+                    cached_data = json.load(f)
+                    # Load stats if present
+                    self.hits = cached_data.get("_metadata", {}).get("hits", 0)
+                    self.misses = cached_data.get("_metadata", {}).get("misses", 0)
+                    self.total_lookups = self.hits + self.misses
+                    # Remove metadata before returning actual cache items
+                    if "_metadata" in cached_data:
+                        del cached_data["_metadata"]
+                    return cached_data
             except (json.JSONDecodeError, IOError) as e:
                 self._log(f"Error loading cache file {self.cache_file}: {e}. Starting with empty cache.")
                 return {}
@@ -72,9 +297,17 @@ class CacheManager:
 
     def save_cache(self):
         try:
+            # Prepare data to save, including metadata
+            data_to_save = self.cache.copy()
+            data_to_save["_metadata"] = {
+                "hits": self.hits,
+                "misses": self.misses,
+                "hit_rate": self.get_hit_rate(),
+                "last_saved_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            }
             with open(self.cache_file, 'w', encoding='utf-8') as f:
-                json.dump(self.cache, f, indent=2)
-            self._log(f"Cache saved to {self.cache_file}")
+                json.dump(data_to_save, f, indent=2)
+            self._log(f"Cache saved to {self.cache_file} (Hits: {self.hits}, Misses: {self.misses}, Rate: {self.get_hit_rate():.2f}%)")
         except IOError as e:
             self._log(f"Warning: Could not save cache to {self.cache_file}: {e}")
 
@@ -82,15 +315,19 @@ class CacheManager:
         return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
     def get_cached_compression(self, content: str, compression_level: str, model_info: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        self.total_lookups += 1
         content_hash = self.get_sha256(content)
         cache_key = f"{content_hash}_{compression_level}"
-        if model_info: # For semantic compression, model can influence output
+        if model_info:
             cache_key += f"_{model_info}"
-
+        
         cached_item = self.cache.get(cache_key)
         if cached_item:
+            self.hits += 1
             self._log(f"Cache hit for key: {cache_key}")
             return cached_item
+        
+        self.misses += 1
         self._log(f"Cache miss for key: {cache_key}")
         return None
 
@@ -99,14 +336,138 @@ class CacheManager:
         cache_key = f"{content_hash}_{compression_level}"
         if model_info:
             cache_key += f"_{model_info}"
-
         self.cache[cache_key] = result
         self._log(f"Cached result for key: {cache_key}")
-        # Consider saving cache immediately or deferring it (e.g., at end of main script)
-        # For frequent operations, deferring might be better. Here, save is explicit.
 
+    def get_hit_rate(self) -> float:
+        if self.total_lookups == 0:
+            return 0.0
+        return (self.hits / self.total_lookups) * 100
+
+    def get_stats(self) -> Dict[str, Any]:
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "total_lookups": self.total_lookups,
+            "hit_rate_percent": self.get_hit_rate()
+        }
+class AdaptiveRateLimiter:
+    """
+    Adaptive rate limiter for OpenRouter API calls that adjusts timing based on response patterns.
+    Prevents 429 errors and maintains conservative throughput.
+    """
+    def __init__(self, max_requests_per_minute: int = 15, quiet: bool = False):
+        self.max_requests_per_minute = max_requests_per_minute
+        self.quiet = quiet
+        self.request_times = deque(maxlen=60) # Stores timestamps of recent requests
+        self.request_durations = deque(maxlen=60) # Stores durations of recent successful requests
+        self.base_delay = 1.0
+        self.current_delay = self.base_delay
+        self.max_delay = 30.0
+        self.consecutive_errors = 0
+        self.last_error_time = 0
+        self.error_types = deque(maxlen=10) # Stores (error_type, status_code, timestamp)
+        self.total_requests = 0
+        self.total_errors = 0
+        self.blocked_requests = 0
+
+    def _log(self, message: str, is_error: bool = False):
+        if not self.quiet or is_error:
+            level = "ERROR" if is_error else "INFO"
+            print(f"RateLimiter ({level}): {message}", file=sys.stderr)
+
+    def can_make_request(self) -> bool:
+        """Check if a request can be made based on current rate limits."""
+        now = time.time()
+        # Remove requests older than 60 seconds
+        while self.request_times and (now - self.request_times[0]) > 60:
+            self.request_times.popleft()
+            if self.request_durations: # Assuming durations are added only for successful ones synced with times
+                 self.request_durations.popleft()
+        return len(self.request_times) < self.max_requests_per_minute
+
+    def wait_if_needed(self) -> float:
+        """Wait if necessary to respect rate limits. Returns actual wait time."""
+        if not self.can_make_request():
+            oldest_request = self.request_times[0]
+            wait_time = 60 - (time.time() - oldest_request) + 1 # +1 for safety margin
+            wait_time = max(wait_time, self.current_delay) # Ensure we also respect adaptive delay
+            self._log(f"Rate limit reached. Waiting {wait_time:.1f}s")
+            self.blocked_requests += 1
+            time.sleep(wait_time)
+            return wait_time
+        
+        # Apply adaptive delay even if within request per minute limit
+        if self.current_delay > self.base_delay:
+            self._log(f"Applying adaptive delay: {self.current_delay:.1f}s")
+            time.sleep(self.current_delay)
+            return self.current_delay
+        return 0.0
+
+    def record_request(self): # Duration will be recorded by record_success
+        """Record a request attempt."""
+        self.request_times.append(time.time())
+        self.total_requests += 1
+        # Optimistic: reduce delay if no errors and current delay is high
+        if self.consecutive_errors == 0 and self.current_delay > self.base_delay:
+            self.current_delay = max(self.base_delay, self.current_delay * 0.8) # Decrease delay by 20%
+            self._log(f"Reducing delay to {self.current_delay:.1f}s after successful request recorded (prior to call)")
+
+
+    def record_error(self, error_type: str, status_code: Optional[int] = None):
+        """Record an error and adjust rate limiting accordingly."""
+        self.total_errors += 1
+        self.consecutive_errors += 1
+        self.last_error_time = time.time()
+        self.error_types.append((error_type, status_code, time.time()))
+
+        if status_code == 429: # Rate limit specifically
+            self.current_delay = min(self.max_delay, self.current_delay * 2.0) # Double delay
+            self._log(f"Rate limit error. Increasing delay to {self.current_delay:.1f}s", is_error=True)
+            self.max_requests_per_minute = max(5, self.max_requests_per_minute - 2) # Become more conservative
+            self._log(f"Reducing max requests/min to {self.max_requests_per_minute}")
+        elif status_code in [500, 502, 503, 504]: # Server-side issues
+            self.current_delay = min(self.max_delay, self.current_delay * 1.5) # Increase delay by 50%
+            self._log(f"Server error ({status_code}). Increasing delay to {self.current_delay:.1f}s", is_error=True)
+        else: # Other errors
+            self.current_delay = min(self.max_delay, self.current_delay * 1.2) # Increase delay by 20%
+            self._log(f"Request error ({error_type}). Increasing delay to {self.current_delay:.1f}s", is_error=True)
+
+    def record_success(self, duration: Optional[float] = None):
+        """Record a successful response and reset error count."""
+        if self.consecutive_errors > 0:
+            self._log(f"Request successful after {self.consecutive_errors} consecutive errors")
+        self.consecutive_errors = 0
+        
+        if duration is not None:
+            self.request_durations.append(duration)
+
+        # Gradually recover max_requests_per_minute if it was reduced
+        original_max_rpm = 15 # Assuming this is a default/target
+        if self.max_requests_per_minute < original_max_rpm:
+             self.max_requests_per_minute = min(original_max_rpm, self.max_requests_per_minute + 1)
+
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get current rate limiter statistics."""
+        error_rate = (self.total_errors / max(1, self.total_requests)) * 100
+        recent_errors = [e for e in self.error_types if time.time() - e[2] < 300] # Errors in last 5 mins
+        
+        avg_duration = sum(self.request_durations) / len(self.request_durations) if self.request_durations else 0.0
+
+        return {
+            "total_requests": self.total_requests,
+            "total_errors": self.total_errors,
+            "blocked_requests": self.blocked_requests,
+            "error_rate_percent": round(error_rate, 2),
+            "current_delay_seconds": round(self.current_delay, 1),
+            "max_requests_per_minute_setting": self.max_requests_per_minute,
+            "consecutive_errors": self.consecutive_errors,
+            "recent_errors_last_5m": len(recent_errors),
+            "avg_successful_request_duration_seconds": round(avg_duration, 2)
+        }
 class SemanticCompressor:
-    """Handles LLM-based semantic compression."""
+    """Handles LLM-based semantic compression with adaptive rate limiting."""
     def __init__(self, quiet: bool = False):
         self.api_key = os.getenv('OPENROUTER_API_KEY')
         self.model_name = os.getenv('SEMANTIC_MODEL', "anthropic/claude-3-haiku-20240307") # Default model
@@ -115,6 +476,10 @@ class SemanticCompressor:
         self.max_tokens_response = int(os.getenv('PAK_LLM_MAX_TOKENS', "2000"))
         self.temperature = float(os.getenv('PAK_LLM_TEMPERATURE', "0.1"))
         self.quiet = quiet
+
+        # Initialize adaptive rate limiter
+        max_rpm = int(os.getenv('PAK_MAX_REQUESTS_PER_MINUTE', "15"))
+        self.rate_limiter = AdaptiveRateLimiter(max_requests_per_minute=max_rpm, quiet=quiet)
 
         if not self.api_key and not self.quiet:
             print("pak_compressor: Warning: OPENROUTER_API_KEY not found in environment. Semantic compression will fail.", file=sys.stderr)
@@ -203,39 +568,61 @@ INSTRUCTIONS:
 - Output ONLY the JSON object, without any surrounding text or markdown.
 """
 
+    @retry_with_exponential_backoff(max_retries=3, base_delay=2.0, max_delay=30.0)
+    # Removed the duplicated decorator that was here
     def _call_llm_api(self, prompt: str) -> str:
+        wait_time = self.rate_limiter.wait_if_needed()
+        if wait_time > 0:
+            self._log(f"Rate limited: waited {wait_time:.1f}s before API call")
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": os.getenv("PAK_HTTP_REFERER", "http://localhost/pak_tool"), # Optional: helps OpenRouter identify app
-            "X-Title": os.getenv("PAK_X_TITLE", "PakTool Semantic Compressor"), # Optional
+            "HTTP-Referer": os.getenv("PAK_HTTP_REFERER", "http://localhost/pak_tool"),
+            "X-Title": os.getenv("PAK_X_TITLE", "PakTool Semantic Compressor"),
         }
         payload = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.max_tokens_response,
             "temperature": self.temperature,
-            "stream": False # Not streaming for this use case
+            "stream": False
         }
 
         self._log(f"Calling LLM API ({self.model_name}) for semantic compression...")
+        self.rate_limiter.record_request() # Record attempt before call
+        
+        start_time = time.time()
         response = requests.post(
             f"{self.api_base_url}/chat/completions",
             headers=headers,
             json=payload,
             timeout=self.timeout
         )
-        response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
+        duration = time.time() - start_time
+
+        if response.status_code == 429:
+            self.rate_limiter.record_error("rate_limit", 429)
+            self._log(f"Rate limit exceeded (429). LLM call duration: {duration:.2f}s. Will retry.", is_error=True)
+        elif response.status_code in [500, 502, 503, 504]:
+            self.rate_limiter.record_error("server_error", response.status_code)
+            self._log(f"Server error ({response.status_code}). LLM call duration: {duration:.2f}s. Will retry.", is_error=True)
+        elif not response.ok:
+            self.rate_limiter.record_error("http_error", response.status_code)
+            self._log(f"HTTP error ({response.status_code}). LLM call duration: {duration:.2f}s. Will retry if retriable.", is_error=True)
+        
+        response.raise_for_status() # This will raise an HTTPError if the response was an error
 
         data = response.json()
         if not data.get("choices") or not data["choices"][0].get("message") or \
            not isinstance(data["choices"][0]["message"].get("content"), str):
-            self._log(f"LLM API response missing expected content structure. Data: {data}", is_error=True)
+            self.rate_limiter.record_error("invalid_response", response.status_code)
+            self._log(f"LLM API response missing expected content structure. Duration: {duration:.2f}s. Data: {data}", is_error=True)
             raise ValueError("Invalid LLM API response structure")
 
-        self._log("LLM API call successful.")
+        self.rate_limiter.record_success(duration=duration)
+        self._log(f"LLM API call successful. Duration: {duration:.2f}s.")
         return data["choices"][0]["message"]["content"].strip()
-
     def _parse_compression_response(self, llm_response_text: str, file_path_for_log: str) -> Dict[str, Any]:
         json_str = llm_response_text
         # Attempt to strip markdown code block fences if present
@@ -285,6 +672,10 @@ INSTRUCTIONS:
         except json.JSONDecodeError as e:
             self._log(f"JSON decoding failed for '{file_path_for_log}': {e}. Response excerpt: {json_str[:500]}...", is_error=True)
             raise ValueError(f"Invalid JSON in LLM response: {e}")
+    
+    def get_rate_limiter_stats(self) -> Dict[str, Any]:
+        """Get current rate limiter statistics."""
+        return self.rate_limiter.get_stats()
 
 
 class Compressor:
@@ -342,7 +733,7 @@ class Compressor:
             cc = cached_result["compressed_content"]
             cs = len(cc.encode('utf-8'))
             cached_result.setdefault("compressed_size", cs)
-            cached_result.setdefault("compressed_tokens", TokenCounter.count_tokens(cc, file_type))
+            cached_result.setdefault("compressed_tokens", LanguageAwareTokenizer.count_tokens(cc, file_type))
             cached_result.setdefault("estimated_tokens", cached_result.get("compressed_tokens", 0))  # Add estimated_tokens alias
             cached_result.setdefault("compression_ratio", original_size_bytes / cs if cs > 0 else (1.0 if original_size_bytes == 0 else float('inf')))
             cached_result["method"] += " (cached)"
@@ -365,7 +756,7 @@ class Compressor:
         result["original_size"] = original_size_bytes
         compressed_content_str = result.get("compressed_content", "")
         result["compressed_size"] = len(compressed_content_str.encode('utf-8'))
-        result["compressed_tokens"] = TokenCounter.count_tokens(compressed_content_str, file_type)
+        result["compressed_tokens"] = LanguageAwareTokenizer.count_tokens(compressed_content_str, file_type)
         result["estimated_tokens"] = result["compressed_tokens"]  # Add estimated_tokens alias
 
         if result["compressed_size"] > 0:
@@ -376,6 +767,15 @@ class Compressor:
         if self.cache_manager:
             model_info_for_cache = self.semantic_model_info if compression_level in ["4", "semantic", "s", "smart"] else None
             self.cache_manager.cache_compression(content, compression_level, result, model_info_for_cache)
+
+        # Log rate limiter stats if semantic compression was used
+        if compression_level in ["4", "semantic", "s", "smart"] and self.semantic_compressor:
+            stats = self.semantic_compressor.get_rate_limiter_stats()
+            if stats["total_requests"] > 0:
+                self._log(f"Rate limiter stats: {stats['total_requests']} requests, "
+                         f"{stats['error_rate_percent']}% errors, "
+                         f"{stats['blocked_requests']} blocked, "
+                         f"current delay: {stats['current_delay']:.1f}s")
 
         return result
 
@@ -518,6 +918,209 @@ class Compressor:
 
     def _compress_none(self, content: str) -> Dict[str, Any]:
         return {"compressed_content": content, "method": "none (raw)"}
+    
+    def get_rate_limiter_stats(self) -> Optional[Dict[str, Any]]:
+        """Get rate limiter statistics if semantic compressor is available."""
+        if self.semantic_compressor:
+            return self.semantic_compressor.get_rate_limiter_stats()
+        return None
+
+
+class ParallelCompressor:
+    """
+    Parallel compression manager that processes multiple files concurrently
+    while respecting rate limits and maintaining conservative throughput.
+    """
+    
+    def __init__(self, base_compressor: Compressor, max_workers: int = 3, quiet: bool = False):
+        self.base_compressor = base_compressor
+        self.max_workers = max_workers
+        self.quiet = quiet
+        
+        # Shared rate limiter instance from semantic compressor
+        self.rate_limiter = None
+        if base_compressor.semantic_compressor:
+            self.rate_limiter = base_compressor.semantic_compressor.rate_limiter
+        
+        # Track parallel execution statistics
+        self.parallel_stats = {
+            "total_files_processed": 0,
+            "files_processed_in_parallel": 0,
+            "files_processed_sequentially": 0,
+            "total_wait_time": 0.0,
+            "average_wait_per_file": 0.0
+        }
+        
+    def _log(self, message: str, is_error: bool = False):
+        if not self.quiet or is_error:
+            level = "ERROR" if is_error else "INFO"
+            print(f"ParallelCompressor ({level}): {message}", file=sys.stderr)
+    
+    def _should_use_parallel(self, compression_tasks: List[Tuple[str, str, str]]) -> bool:
+        """Determine if parallel processing is beneficial for the given tasks."""
+        # Only parallelize if we have multiple files and semantic compression is likely
+        if len(compression_tasks) < 2:
+            return False
+            
+        # Check if any tasks will likely use semantic compression (expensive operations)
+        semantic_likely = any(
+            self._compression_uses_semantic(task[2]) for task in compression_tasks
+        )
+        
+        return semantic_likely and self.rate_limiter is not None
+    
+    def _compression_uses_semantic(self, compression_level: str) -> bool:
+        """Check if compression level uses semantic compression."""
+        return compression_level in ["4", "semantic", "s", "smart"]
+    
+    def compress_files_parallel(self, compression_tasks: List[Tuple[str, str, str]]) -> List[Dict[str, Any]]:
+        """
+        Compress multiple files in parallel.
+        
+        Args:
+            compression_tasks: List of (content, file_path, compression_level) tuples
+            
+        Returns:
+            List of compression results in the same order as input
+        """
+        if not compression_tasks:
+            return []
+            
+        # Decide whether to use parallel processing
+        if not self._should_use_parallel(compression_tasks):
+            self._log(f"Processing {len(compression_tasks)} files sequentially")
+            return self._compress_sequential(compression_tasks)
+        
+        self._log(f"Processing {len(compression_tasks)} files in parallel (max_workers={self.max_workers})")
+        return self._compress_parallel(compression_tasks)
+    
+    def _compress_sequential(self, compression_tasks: List[Tuple[str, str, str]]) -> List[Dict[str, Any]]:
+        """Process files sequentially (fallback)."""
+        results = []
+        for content, file_path, compression_level in compression_tasks:
+            result = self.base_compressor.compress_content(content, file_path, compression_level)
+            results.append(result)
+            self.parallel_stats["files_processed_sequentially"] += 1
+        
+        self.parallel_stats["total_files_processed"] += len(compression_tasks)
+        return results
+    
+    def _compress_parallel(self, compression_tasks: List[Tuple[str, str, str]]) -> List[Dict[str, Any]]:
+        """Process files in parallel with rate limiting."""
+        results = [None] * len(compression_tasks)  # Preserve order
+        total_wait_time = 0.0
+        
+        # Separate semantic and non-semantic tasks
+        semantic_tasks = []
+        non_semantic_tasks = []
+        
+        for i, (content, file_path, compression_level) in enumerate(compression_tasks):
+            task_with_index = (i, content, file_path, compression_level)
+            if self._compression_uses_semantic(compression_level):
+                semantic_tasks.append(task_with_index)
+            else:
+                non_semantic_tasks.append(task_with_index)
+        
+        # Process non-semantic tasks in parallel first (no rate limiting needed)
+        if non_semantic_tasks:
+            self._log(f"Processing {len(non_semantic_tasks)} non-semantic tasks in parallel")
+            with ThreadPoolExecutor(max_workers=min(self.max_workers, len(non_semantic_tasks))) as executor:
+                future_to_index = {}
+                for i, content, file_path, compression_level in non_semantic_tasks:
+                    future = executor.submit(self.base_compressor.compress_content, content, file_path, compression_level)
+                    future_to_index[future] = i
+                
+                for future in as_completed(future_to_index):
+                    index = future_to_index[future]
+                    try:
+                        result = future.result()
+                        results[index] = result
+                        self.parallel_stats["files_processed_in_parallel"] += 1
+                    except Exception as e:
+                        self._log(f"Error processing file at index {index}: {e}", is_error=True)
+                        # Create error result
+                        results[index] = {
+                            "compressed_content": compression_tasks[index][0],  # Original content
+                            "method": f"error: {str(e)}",
+                            "original_size": len(compression_tasks[index][0].encode('utf-8')),
+                            "compressed_size": len(compression_tasks[index][0].encode('utf-8')),
+                            "estimated_tokens": len(compression_tasks[index][0]) // 3,
+                            "compression_ratio": 1.0
+                        }
+        
+        # Process semantic tasks with controlled parallelism and rate limiting
+        if semantic_tasks:
+            self._log(f"Processing {len(semantic_tasks)} semantic tasks with rate limiting")
+            wait_time = self._process_semantic_tasks_controlled(semantic_tasks, results, compression_tasks)
+            total_wait_time += wait_time
+        
+        # Update statistics
+        self.parallel_stats["total_files_processed"] += len(compression_tasks)
+        self.parallel_stats["total_wait_time"] += total_wait_time
+        if len(compression_tasks) > 0:
+            self.parallel_stats["average_wait_per_file"] = total_wait_time / len(compression_tasks)
+        
+        return results
+    
+    def _process_semantic_tasks_controlled(self, semantic_tasks: List[Tuple[int, str, str, str]], 
+                                         results: List[Dict[str, Any]], 
+                                         all_tasks: List[Tuple[str, str, str]]) -> float:
+        """Process semantic tasks with careful rate limiting."""
+        total_wait_time = 0.0
+        
+        # Use a smaller pool for semantic tasks to be more conservative
+        semantic_workers = min(2, self.max_workers, len(semantic_tasks))
+        
+        with ThreadPoolExecutor(max_workers=semantic_workers) as executor:
+            future_to_index = {}
+            
+            for i, content, file_path, compression_level in semantic_tasks:
+                # Submit task with rate-limited wrapper
+                future = executor.submit(self._rate_limited_compress, content, file_path, compression_level)
+                future_to_index[future] = i
+            
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    result, wait_time = future.result()
+                    results[index] = result
+                    total_wait_time += wait_time
+                    self.parallel_stats["files_processed_in_parallel"] += 1
+                except Exception as e:
+                    self._log(f"Error processing semantic file at index {index}: {e}", is_error=True)
+                    # Create error result
+                    original_task = all_tasks[index]
+                    results[index] = {
+                        "compressed_content": original_task[0],  # Original content
+                        "method": f"semantic-error: {str(e)}",
+                        "original_size": len(original_task[0].encode('utf-8')),
+                        "compressed_size": len(original_task[0].encode('utf-8')),
+                        "estimated_tokens": len(original_task[0]) // 3,
+                        "compression_ratio": 1.0
+                    }
+        
+        return total_wait_time
+    
+    def _rate_limited_compress(self, content: str, file_path: str, compression_level: str) -> Tuple[Dict[str, Any], float]:
+        """Wrapper that applies rate limiting before compression."""
+        wait_time = 0.0
+        
+        # Apply rate limiting if we have a semantic compressor
+        if self.rate_limiter and self._compression_uses_semantic(compression_level):
+            wait_time = self.rate_limiter.wait_if_needed()
+        
+        result = self.base_compressor.compress_content(content, file_path, compression_level)
+        return result, wait_time
+    
+    def get_parallel_stats(self) -> Dict[str, Any]:
+        """Get parallel processing statistics."""
+        stats = self.parallel_stats.copy()
+        
+        # Add rate limiter stats if available
+        if self.rate_limiter:
+            stats["rate_limiter"] = self.rate_limiter.get_stats()
+        
+        return stats
 
 
 if __name__ == '__main__':

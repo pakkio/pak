@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 pak.py - LLM-enhanced file archiver with semantic compression and method diff support.
 Main CLI entry point for all pak operations.
@@ -172,6 +171,8 @@ PACK OPTIONS:
   -c LEVEL             Compression: 0=none, 1=light, 2=medium, 3=aggressive, 4=semantic, s=smart.
        Example: -c 2 or -c 4 or -c semantic
   -m NUM               Max tokens (0=unlimited). Example: -m 8000
+  -j NUM               Parallel workers (1-5, default: 1). Use 2-3 for semantic compression.
+       Example: -j 3
   -o FILE              Output file (default: stdout or auto-generated if stdout is a TTY).
        Example: -o project.pak
   -q                   Quiet mode.
@@ -190,6 +191,7 @@ EXAMPLES:
   # Modern pak usage
   pak . -t py,md -c 4                        # Semantic compression, Python+Markdown
   pak src/ -c s -m 8000 -o project.pak      # Smart mode, 8k token limit
+  pak . -c semantic -j 3 -o project.pak     # Semantic with 3 parallel workers
   
   # Legacy syntax (backward compatible)
   pak --compress-level smart --max-tokens 8000 src/  # Legacy format
@@ -319,6 +321,8 @@ def main():
                         help='Max total estimated tokens (0=unlimited)')
     parser.add_argument('-t', '--types', '--ext',
                         help='File extensions (comma-separated): py,md,js')
+    parser.add_argument('-j', '--parallel', type=int, default=1, metavar='N',
+                        help='Number of parallel workers for compression (default: 1, max recommended: 3)')
     
     # Output options
     parser.add_argument('-o', '--output', 
@@ -454,14 +458,42 @@ def execute_pack_command(args, compression_level, extensions):
     cache_mgr = CacheManager(cache_identifier, args.quiet)
     pak.set_cache_manager(cache_mgr)
     
-    for file_path in collected_files:
-        try:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            pak.add_file(file_path, content)
-        except Exception as e:
-            if not args.quiet:
-                print(f"pak: Warning: Could not read file {file_path}: {e}", file=sys.stderr)
+    # Validate parallel workers setting
+    max_workers = max(1, min(args.parallel, 5))  # Clamp between 1-5 for safety
+    if args.parallel != max_workers and not args.quiet:
+        print(f"pak: Parallel workers clamped to {max_workers} (requested: {args.parallel})", file=sys.stderr)
+    
+    # Choose processing method based on file count and parallel setting
+    if len(collected_files) > 1 and max_workers > 1:
+        if not args.quiet:
+            print(f"pak: Processing {len(collected_files)} files with {max_workers} parallel workers", file=sys.stderr)
+        
+        # Collect all file data for batch processing
+        file_data_list = []
+        for file_path in collected_files:
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                file_data_list.append((file_path, content, 0))  # importance = 0 for all
+            except Exception as e:
+                if not args.quiet:
+                    print(f"pak: Warning: Could not read file {file_path}: {e}", file=sys.stderr)
+        
+        # Process files in parallel
+        pak.add_files_parallel(file_data_list, max_workers=max_workers)
+    else:
+        # Sequential processing (original behavior)
+        if not args.quiet and len(collected_files) > 1:
+            print(f"pak: Processing {len(collected_files)} files sequentially", file=sys.stderr)
+        
+        for file_path in collected_files:
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                pak.add_file(file_path, content)
+            except Exception as e:
+                if not args.quiet:
+                    print(f"pak: Warning: Could not read file {file_path}: {e}", file=sys.stderr)
     
     archive_output = pak.create_archive(output_path)
     if archive_output:
@@ -552,9 +584,24 @@ def execute_apply_diff_command(args):
     
     diff_file = args.targets[0]
     target_path = args.targets[1]
-    
+
+    # Output pak file logic is now bypassed
+    output_pak = args.output if hasattr(args, 'output') and args.output else None
+    if not output_pak and sys.stdout.isatty():
+        if not args.quiet:
+            print(f"pak: Note: Output pak file generation for applied diffs is currently bypassed by this fix.", file=sys.stderr)
+
+    # Apply the diff to the target path (file or directory)
     success = MethodDiffManager.apply_diff(diff_file, target_path, quiet=args.quiet)
-    return 0 if success else 1
+    if not success:
+        if not args.quiet:
+            print("pak: Warning: Diff application reported no successful changes or an error occurred.", file=sys.stderr)
+        return 1
+    else:
+        if not args.quiet:
+            print(f"pak: Diff successfully applied. Target path '{target_path}' may have been modified.", file=sys.stderr)
+            print(f"pak: NOTE: The feature to output a '_patched.pak' file is disabled with this modification.", file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":
