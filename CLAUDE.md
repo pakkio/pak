@@ -6,15 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Pak is a semantic compression tool family designed to solve the copy-paste workflow problem when working with LLMs. It packages multiple files into LLM-friendly formats and extracts modified code back to proper file structures.
 
-The repository contains multiple variants:
-- **pak** (Bash script) - Simple, zero-dependency solution  
-- **pak4.py** (Python CLI) - Full-featured with semantic LLM compression and method-level diff support
+The repository contains two main variants:
+- **pak** (Bash script) - Simple, zero-dependency solution for basic operations
+- **pak.py** (Python CLI) - Full-featured with semantic LLM compression and method-level diff support
 
 ## Core Architecture
 
 ### Main Components
 
-**pak4.py** - Primary Python CLI containing:
+**pak.py** - Primary Python CLI containing:
 - `SmartArchiver` class: Main orchestration for file collection, compression, and archive generation
 - Multiple compression strategies: None, Light, Medium, Aggressive (AST-based), and Semantic (LLM-based)
 - `FilePrioritizer`: Assigns importance scores to files for smart compression
@@ -68,28 +68,32 @@ python3 pak_core.py --version
 poetry run pytest --version
 ```
 
-### Running pak4.py (Main Python CLI)
+### Running pak.py (Main Python CLI)
 ```bash
 # Basic packing (default command)
-./pak4.py src/ -c smart -m 8000
+./pak.py src/ -c smart -m 8000
 # or
-python3 pak4.py src/ -c smart -m 8000
+python3 pak.py src/ -c smart -m 8000
 
 # List and extract operations
-./pak4.py -l archive.pak
-./pak4.py -x archive.pak -d output/
+./pak.py -l archive.pak
+./pak.py -x archive.pak -d output/
 
 # Method diff workflow
-./pak4.py --diff original.py modified.py -o changes.diff  # Generate diff
-./pak4.py -vd changes.diff                               # Verify diff
-./pak4.py -ad changes.diff target_project/               # Apply diff
+./pak.py --diff original.py modified.py -o changes.diff  # Generate diff
+./pak.py -vd changes.diff                               # Verify diff
+./pak.py -ad changes.diff target_project/               # Apply diff
 
 # With semantic compression (requires .env setup)
-PAK_DEBUG=true ./pak4.py -c semantic src/
+PAK_DEBUG=true ./pak.py -c semantic src/
+
+# Legacy syntax (backward compatible)
+./pak --compress-level smart --max-tokens 8000 src/
+./pak --ext .py .md --compress-level semantic .
 
 # Version and help
-./pak4.py --version
-./pak4.py --help
+./pak.py --version
+./pak.py --help
 ```
 
 ### Testing Commands
@@ -107,9 +111,9 @@ python3 test_semantic_compressor.py <file_path> semantic <language>
 black .
 
 # Test individual components manually
-./pak4 test_method_diff/ -c smart -m 5000    # Test with small dataset
-./pak4 -l archive.pak                        # Verify archive format
-./pak4 -vd changes.diff                      # Verify diff syntax
+./pak.py test_method_diff/ -c smart -m 5000    # Test with small dataset
+./pak.py -l archive.pak                        # Verify archive format
+./pak.py -vd changes.diff                      # Verify diff syntax
 ```
 
 ### Script Variants
@@ -117,8 +121,8 @@ black .
 # pak - Simple bash version (zero dependencies)
 ./pak src/ --compress-level medium
 
-# pak4.py - Full featured Python CLI (recommended)
-./pak4.py . -c smart -m 8000 -o project.pak
+# pak.py - Full featured Python CLI (recommended)
+./pak.py . -c smart -m 8000 -o project.pak
 
 # Legacy pak3/pak4 bash scripts (deprecated)
 ./pak3 --compress-level smart --max-tokens 8000 src/
@@ -181,15 +185,15 @@ poetry run pytest tests/test_pak_compressor.py -v # Test compression strategies
 poetry run pytest tests/test_pak_analyzer.py -v   # Test language detection
 
 # Manual verification with debug output
-PAK_DEBUG=true ./pak4.py test_method_diff/ -c smart -m 5000
+PAK_DEBUG=true ./pak.py test_method_diff/ -c smart -m 5000
 
 # Test archive integrity
-./pak4.py -v archive.pak
+./pak.py -v archive.pak
 
 # Test specific method diff workflow
-./pak4.py --diff original.py modified.py -o test.diff
-./pak4.py -vd test.diff
-./pak4.py -ad test.diff target_file.py
+./pak.py --diff original.py modified.py -o test.diff
+./pak.py -vd test.diff
+./pak.py -ad test.diff target_file.py
 
 # Run all tests in sequence
 poetry run pytest tests/ -v && python3 test_pak_core_integration.py && python3 test_pak4_integration.py
@@ -212,7 +216,7 @@ poetry run pytest tests/ -v && python3 test_pak_core_integration.py && python3 t
 
 - **LLM Integration**: Uses `llm_wrapper.py` for API calls to external LLM services
 - **Tree-sitter**: Optional dependency for AST analysis (automatically falls back to text-based compression if unavailable)
-- **CLI Integration**: `pak4.py` is the main Python CLI entry point
+- **CLI Integration**: `pak.py` is the main Python CLI entry point
 - **Archive Format**: Custom JSON-based format with UUID markers designed for LLM consumption and human readability
 - **Multi-language Support**: Python, JavaScript, Java method extraction and diff application
 
@@ -225,38 +229,38 @@ poetry run pytest tests/ -v && python3 test_pak_core_integration.py && python3 t
 - Debug mode available via `PAK_DEBUG=true` environment variable
 
 ### Module Architecture
-The codebase follows a modular pattern where `pak_core.py` orchestrates specialized modules:
+The codebase follows a modular pattern where `pak.py` orchestrates specialized modules:
 - **pak_compressor.py** - Compression strategies and token management
 - **pak_differ.py** - Method-level diff extraction and application  
 - **pak_archive_manager.py** - Archive format handling
 - **pak_utils.py** - File collection and utilities
 - **pak_analyzer.py** - Language-specific analysis
 
-### Architecture Simplification (v4.2.0)
-**IMPORTANT**: The pak tool family has been simplified to two main variants:
+### Architecture Simplification (v5.0.0)
+**IMPORTANT**: The pak tool family has been consolidated to two main variants:
 
 - **pak** (Bash script) - Simple, zero-dependency solution for basic tasks
-- **pak4.py** (Python CLI) - Full-featured with semantic compression and method diff support
+- **pak.py** (Python CLI) - Full-featured with semantic compression and method diff support
 
 **Benefits of the simplification:**
 - Eliminates confusing multiple variants (pak3, pak4 bash wrapper)
-- Single Python entry point (`pak4.py`) for all advanced features
+- Single Python entry point (`pak.py`) for all advanced features
 - Direct Python execution is more reliable and debuggable
 - Unified CLI interface with consistent argument handling
 - Better error messages and help system
 
 ### Version Management
-- `pak` (bash) and `pak4.py` (Python) are the two supported variants
-- pak4.py is version 4.2.0+ with full feature set
+- `pak` (bash) and `pak.py` (Python) are the two supported variants
+- pak.py is version 5.0.0+ with full feature set and backward compatibility
 - Legacy pak3/pak4 bash scripts are deprecated
 - Backward compatibility maintained across versions
 
 ## Standalone Executables
 
-From version 4, you can use `pak4` and `ast_helper` as standalone executables (no Python required) by copying them to `~/bin`:
+From version 5, you can use `pak` and `ast_helper` as standalone executables (no Python required) by copying them to `~/bin`:
 
 ```bash
-cp dist/pak4 ~/bin/
+cp dist/pak ~/bin/
 cp dist/ast_helper ~/bin/
 ```
 Ensure `~/bin` is in your `$PATH`.
@@ -264,7 +268,7 @@ Ensure `~/bin` is in your `$PATH`.
 You can now run:
 
 ```bash
-pak4 ...
+pak ...
 ast_helper ...
 ```
 
@@ -275,12 +279,12 @@ These executables bundle all dependencies (including tree-sitter for AST analysi
 To build the standalone executables, use Poetry and PyInstaller:
 
 ```bash
-poetry run pyinstaller --onefile pak4.py
+poetry run pyinstaller --onefile pak.py
 poetry run pyinstaller --onefile ast_helper.py
 ```
 The executables will be created in the `dist/` directory. Copy them to `~/bin` as shown above.
 
 ### Troubleshooting
-- Make sure the files are executable: `chmod +x ~/bin/pak4 ~/bin/ast_helper`
+- Make sure the files are executable: `chmod +x ~/bin/pak ~/bin/ast_helper`
 - Check that `~/bin` is in your `$PATH`
 - If you encounter issues with PyInstaller, rebuild as above
