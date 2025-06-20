@@ -158,6 +158,9 @@ The project uses a **mixed testing approach** combining integration tests and un
   - `test_pak_differ.py` - Tests method diff extraction and application
   - `test_pak_utils.py` - Tests file collection utilities
   - `test_llm_wrapper.py` - Tests LLM API integration
+- **`tests/integration/`** - Integration tests for advanced features:
+  - `test_pakdiff_multilang.py` - Multi-language pakdiff format v4.3.0 tests
+  - `pakdiff_multilang/` - Test fixtures for Python, C++, and config files
 - **`test_semantic_compressor.py`** - Mock LLM for testing semantic compression without API calls
 
 ### Testing Patterns
@@ -165,7 +168,8 @@ The project uses a **mixed testing approach** combining integration tests and un
 2. **Unit Testing**: pytest-based tests for individual modules and functions
 3. **Round-trip Testing**: pack → extract → compare workflows to ensure data integrity
 4. **Mock Testing**: Use fake semantic compressor to test compression logic without API costs
-5. **Multi-language Testing**: Test method diff system across Python, JavaScript, and Java
+5. **Multi-language Testing**: Test method diff system across Python, C++, Java, and configuration files
+6. **Enhanced Pakdiff Testing**: GLOBAL_PREAMBLE sections, decorator handling, boundary detection
 
 ### Development Testing Workflow
 ```bash
@@ -179,6 +183,12 @@ poetry run pytest tests/ -v                      # Run all module tests
 poetry run pytest tests/test_pak_differ.py -v    # Test method diff functionality
 poetry run pytest tests/test_pak_compressor.py -v # Test compression strategies
 poetry run pytest tests/test_pak_analyzer.py -v   # Test language detection
+
+# Multi-language pakdiff integration tests
+poetry run pytest tests/integration/test_pakdiff_multilang.py -v
+
+# All pakdiff-related tests
+poetry run pytest tests/ -k "pakdiff or differ" -v
 
 # Manual verification with debug output
 PAK_DEBUG=true ./pak.py test_method_diff/ -c smart -m 5000
@@ -214,7 +224,8 @@ poetry run pytest tests/ -v && python3 test_pak_core_integration.py && python3 t
 - **Tree-sitter**: Optional dependency for AST analysis (automatically falls back to text-based compression if unavailable)
 - **CLI Integration**: `pak.py` is the main Python CLI entry point
 - **Archive Format**: Custom JSON-based format with UUID markers designed for LLM consumption and human readability
-- **Multi-language Support**: Python, JavaScript, Java method extraction and diff application
+- **Multi-language Support**: Python, JavaScript, Java, C++, Go, Rust method extraction and diff application
+- **Enhanced Pakdiff Format v4.3.0**: GLOBAL_PREAMBLE sections, decorator handling, cross-language compatibility
 
 ## Development Notes
 

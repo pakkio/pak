@@ -97,7 +97,7 @@ cp .env.sample .env
 
 ### Method-Level Diffs (v4.3.0)
 
-Extract and apply changes at the method/function level rather than entire files. Now supports global sections for imports, constants, and module-level changes:
+Extract and apply changes at the method/function level rather than entire files. Now supports global sections for imports, constants, and module-level changes across multiple programming languages:
 
 ```bash
 # Extract differences between files
@@ -111,9 +111,13 @@ Extract and apply changes at the method/function level rather than entire files.
 ```
 
 **Enhanced v4.3.0 features:**
-- **Global section support**: Import statements, constants, module-level variables
-- **Decorator handling**: Proper removal/addition of decorators like `@property`
+- **Multi-language support**: Python, C++, Java, Go, Rust, configuration files
+- **GLOBAL_PREAMBLE sections**: Handle imports, includes, constants, and module-level variables
+- **Decorator handling**: Proper removal/addition of decorators like `@property` with boundary detection
 - **Mixed changes**: Combine global and method changes in single diff files
+- **Automatic boundary detection**: Smart detection of section boundaries when UNTIL_EXCLUDE is omitted
+- **LLM integration prompts**: Self-documenting format with embedded analysis templates
+- **Configuration file support**: Section-based changes for INI, YAML, and other config formats
 
 ### File Filtering
 
@@ -200,8 +204,14 @@ Preparing context for documentation generation:
 python3 test_method_diff.py
 python3 test_pak_core_integration.py
 
-# Run unit tests
+# Run unit tests for all modules
 poetry run pytest tests/ -v
+
+# Run pakdiff multi-language integration tests
+poetry run pytest tests/integration/test_pakdiff_multilang.py -v
+
+# Run all pakdiff-related tests
+poetry run pytest tests/ -k "pakdiff or differ" -v
 
 # Test with debug output
 PAK_DEBUG=true ./pak.py test_files/ -c smart -m 5000

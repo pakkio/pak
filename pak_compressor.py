@@ -168,9 +168,23 @@ class LanguageAwareTokenizer:
         },
         'cpp': {
             'base_ratio': 2.7,
-            'keywords': r'\b(int|char|float|double|void|bool|class|namespace|template|if|else|for|while|do|switch|case|break|continue|return|include|using)\b',
+            'keywords': r'\b(int|char|float|double|void|bool|auto|const|static|inline|virtual|override|final|class|struct|namespace|template|typename|if|else|for|while|do|switch|case|break|continue|return|include|using|public|private|protected|try|catch|throw|new|delete|this|nullptr)\b',
             'keyword_weight': 0.6,
-            'string_patterns': r'".*?"',
+            'string_patterns': r'".*?"|\'.*?\'|R"[^(]*\([^)]*\)[^"]*"',
+            'comment_patterns': r'//.*$|/\*.*?\*/'
+        },
+        'c_header': {
+            'base_ratio': 2.5,
+            'keywords': r'\b(int|char|float|double|void|const|static|extern|typedef|struct|union|enum|include|define|ifndef|endif|ifdef|if|else|elif)\b',
+            'keyword_weight': 0.5,
+            'string_patterns': r'".*?"|\'.*?\'',
+            'comment_patterns': r'//.*$|/\*.*?\*/'
+        },
+        'cpp_header': {
+            'base_ratio': 2.6,
+            'keywords': r'\b(int|char|float|double|void|bool|auto|const|static|inline|virtual|template|typename|class|struct|namespace|include|define|ifndef|endif|ifdef|if|else|elif|public|private|protected)\b',
+            'keyword_weight': 0.6,
+            'string_patterns': r'".*?"|\'.*?\'|R"[^(]*\([^)]*\)[^"]*"',
             'comment_patterns': r'//.*$|/\*.*?\*/'
         },
         'go': {

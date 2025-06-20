@@ -1,0 +1,60 @@
+FILE: config.txt
+SECTION: GLOBAL_PREAMBLE
+UNTIL_EXCLUDE: # Language-specific settings
+REPLACE_WITH:
+# Enhanced configuration file for multi-language test project
+
+# Global settings (updated)
+app_name = "Enhanced Multi-Language Tester"
+version = "2.0.0"
+debug_mode = true
+enable_metrics = true
+
+FILE: config.txt
+FIND_METHOD: # Language-specific settings
+python_interpreter = "/usr/bin/python3"
+java_version = "11"
+cpp_standard = "c++17"
+UNTIL_EXCLUDE: # Performance settings
+REPLACE_WITH:
+# Language-specific settings (enhanced)
+python_interpreter = "/usr/bin/python3"
+python_version = "3.8+"
+java_version = "11"
+java_opts = "-Xmx1g -server"
+cpp_standard = "c++17"
+cpp_optimization = "-O2"
+
+FILE: config.txt
+FIND_METHOD: # Performance settings
+max_memory_mb = 512
+timeout_seconds = 30
+worker_threads = 4
+UNTIL_EXCLUDE: # Logging configuration
+REPLACE_WITH:
+# Performance settings (improved)
+max_memory_mb = 1024
+timeout_seconds = 60
+worker_threads = 8
+cache_size_mb = 256
+
+FILE: config.txt
+FIND_METHOD: # Logging configuration
+log_level = "INFO"
+log_file = "/var/log/multitest.log"
+enable_console_logging = true
+UNTIL_EXCLUDE: 
+REPLACE_WITH:
+# Logging configuration (enhanced)
+log_level = "DEBUG"
+log_file = "/var/log/multitest.log"
+log_rotation = true
+max_log_size_mb = 100
+enable_console_logging = true
+enable_structured_logging = true
+
+# New monitoring settings
+enable_profiling = true
+metrics_endpoint = "http://localhost:9090/metrics"
+health_check_interval = 30
+alert_on_errors = true

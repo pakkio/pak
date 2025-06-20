@@ -1,0 +1,21 @@
+# Configuration file for multi-language test project
+
+# Global settings
+app_name = "Multi-Language Tester"
+version = "1.0.0"
+debug_mode = false
+
+# Language-specific settings
+python_interpreter = "/usr/bin/python3"
+java_version = "11"
+cpp_standard = "c++17"
+
+# Performance settings
+max_memory_mb = 512
+timeout_seconds = 30
+worker_threads = 4
+
+# Logging configuration
+log_level = "INFO"
+log_file = "/var/log/multitest.log"
+enable_console_logging = true

@@ -183,6 +183,8 @@ class MethodDiffManager:
             if line_stripped.startswith("FILE:"):
                 if current_instruction: diff_instructions.append(current_instruction)
                 current_instruction = {"file": line_stripped.split(":", 1)[1].strip()}
+            elif line_stripped.startswith("SECTION:"):
+                current_instruction["section"] = line_stripped.split(":", 1)[1].strip()
             elif line_stripped.startswith("FIND_METHOD:"):
                 current_instruction["find_method"] = line_stripped.split(":", 1)[1].strip()
             elif line_stripped.startswith("UNTIL_EXCLUDE:"):
@@ -277,13 +279,34 @@ class MethodDiffManager:
             MethodDiffManager._log(f"Error reading target file '{target_file_path}' for applying diff: {e}", quiet, is_error=True)
             return False
 
+        section_type = instruction.get("section", "").strip()
         find_sig = instruction.get("find_method", "").strip()
         until_sig = instruction.get("until_exclude", "").strip()
         replace_block = instruction.get("replace_with", "") # This is a multi-line string
 
         modified_lines = list(original_lines) # Work on a copy
 
-        if not find_sig: # Add new content (typically at the end of the file)
+        # Handle GLOBAL_PREAMBLE sections
+        if section_type == "GLOBAL_PREAMBLE":
+            # Find end boundary (UNTIL_EXCLUDE or first def/class)
+            end_idx = len(modified_lines)
+            if until_sig:
+                for i, line in enumerate(modified_lines):
+                    if until_sig in line.strip():
+                        end_idx = i
+                        break
+            else:
+                # Auto-detect first def/class if no UNTIL_EXCLUDE
+                for i, line in enumerate(modified_lines):
+                    line_stripped = line.lstrip()
+                    if line_stripped.startswith(("def ", "async def ", "class ")):
+                        end_idx = i
+                        break
+            
+            # Replace entire preamble (from start of file to boundary)
+            modified_lines = replace_block.splitlines() + modified_lines[end_idx:]
+            MethodDiffManager._log(f"  Applied GLOBAL_PREAMBLE to '{target_file_path}'", quiet)
+        elif not find_sig: # Add new content (typically at the end of the file)
             if replace_block.strip(): # Only add if there's non-whitespace content
                 if modified_lines and modified_lines[-1].strip() != "": # Add a blank line if file not empty and doesn't end blank
                     modified_lines.append("")

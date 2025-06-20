@@ -126,6 +126,29 @@ class MultiLanguageAnalyzer:
                 if signatures:
                     return '\n'.join(signatures) + f'\n# ... (Aggressive compression via regex - {language})'
             
+            elif language in ['cpp', 'c', 'cpp_header', 'c_header']:
+                # Extract C++ class, function, and preprocessor declarations
+                signatures = []
+                for line in content.split('\n'):
+                    line = line.strip()
+                    # Include preprocessor directives, class/struct/namespace declarations, function signatures
+                    if (line.startswith('#include') or line.startswith('#define') or 
+                        line.startswith('#ifndef') or line.startswith('#endif') or
+                        line.startswith('namespace ') or line.startswith('class ') or 
+                        line.startswith('struct ') or line.startswith('template') or
+                        line.startswith('using ') or line.startswith('typedef ') or
+                        # Function-like patterns (simplified heuristic)
+                        ('(' in line and ')' in line and not line.startswith('//') and
+                         any(keyword in line for keyword in ['int ', 'void ', 'bool ', 'auto ', 'char ', 'float ', 'double ']))):
+                        if '{' in line:
+                            signatures.append(line.split('{')[0].strip() + ' { ... }')
+                        elif ';' in line:
+                            signatures.append(line.strip())
+                        else:
+                            signatures.append(line.strip())
+                if signatures:
+                    return '\n'.join(signatures) + f'\n# ... (Aggressive compression via regex - {language})'
+            
             # Fallback to medium compression
             return MultiLanguageAnalyzer._fallback_compression(content, language, "medium")
         
