@@ -302,6 +302,23 @@ class MethodDiffManager:
                 MethodDiffManager._log(f"  Signature '{find_sig}' not found in '{target_file_path}'. Cannot apply diff.", quiet, is_error=True)
                 return False
 
+            # Enhanced: Scan backwards to include decorators
+            decorator_start_idx = start_idx
+            for i in range(start_idx - 1, -1, -1):
+                line = modified_lines[i].strip()
+                if line.startswith('@'):
+                    # Found a decorator, extend the start
+                    decorator_start_idx = i
+                elif line == '' or line.startswith('#'):
+                    # Empty line or comment, continue scanning
+                    continue
+                else:
+                    # Non-decorator, non-empty line - stop scanning
+                    break
+            
+            # Update start_idx to include decorators
+            start_idx = decorator_start_idx
+
             # Determine end_idx (exclusive)
             end_idx = len(modified_lines) # Default to end of file
             if until_sig:
