@@ -23,7 +23,7 @@ Pak is a **semantic compression tool** that packages multiple files into LLM-fri
 ### Key Features
 
 - **Semantic Compression**: Uses AST analysis and even LLM-based compression to understand code structure
-- **Method-Level Diffs**: Generate, verify, and apply granular code changes
+- **Method-Level Diffs**: Generate, verify, and apply granular code changes with global section support
 - **Smart Prioritization**: Automatically distinguishes between critical files and less important ones
 - **Token Budget Management**: Rigorous token counting with adaptive compression
 - **Multi-Language Support**: Python, JavaScript, Java, and more
@@ -95,20 +95,25 @@ cp .env.sample .env
 ./pak.py src/ -c semantic -m 8000
 ```
 
-### Method-Level Diffs
+### Method-Level Diffs (v4.3.0)
 
-Extract and apply changes at the method/function level rather than entire files:
+Extract and apply changes at the method/function level rather than entire files. Now supports global sections for imports, constants, and module-level changes:
 
 ```bash
 # Extract differences between files
 ./pak.py --diff original.py modified.py -o changes.diff
 
-# Verify the diff file
+# Verify the diff file (supports GLOBAL_PREAMBLE sections)
 ./pak.py -vd changes.diff
 
-# Apply changes to target files
+# Apply changes to target files (handles decorators correctly)
 ./pak.py -ad changes.diff target_directory/
 ```
+
+**Enhanced v4.3.0 features:**
+- **Global section support**: Import statements, constants, module-level variables
+- **Decorator handling**: Proper removal/addition of decorators like `@property`
+- **Mixed changes**: Combine global and method changes in single diff files
 
 ### File Filtering
 
@@ -292,7 +297,8 @@ PAK_DEBUG=true ./pak.py src/ -c semantic -m 8000
 ## Version History
 
 - **v5.0**: Consolidated pak4.py → pak.py, full backward compatibility
-- **v4.2**: Method diff system, semantic compression, AST analysis
+- **v4.3**: Enhanced pakdiff format with GLOBAL_PREAMBLE sections and decorator bug fixes
+- **v4.2**: Method diff system, semantic compression, AST analysis  
 - **v3.x**: Original Python implementation with advanced features
 - **v2.x**: Bash script with basic compression
 - **v1.x**: Initial implementation
